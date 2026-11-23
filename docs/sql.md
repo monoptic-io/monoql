@@ -246,9 +246,16 @@ SHOW PARTITIONS {IN | FROM} table
 SHOW GRANTS [ON [kind] object] [TO grantee]
 SHOW SETTINGS
 
-DESCRIBE [TABLE] table [column]
+DESCRIBE [TABLE] {table | view} [column]
 DESCRIBE {SCHEMA | DATABASE} schema
 ```
+
+`DESCRIBE` and `SHOW COLUMNS` work on views and materialized views as well as
+tables. A view's columns are derived from its definition each time, so a view
+whose definition is no longer valid (because a table it reads was dropped,
+say) has none, and `DESCRIBE` of it fails. Write `DESCRIBE TABLE x` if the
+name is a keyword such as `m` or `k`; without `TABLE`, Calcite's grammar
+takes what follows for a statement to explain.
 
 Each is a `SELECT` from the metadata table of the same name (`DESCRIBE` reads
 `METADATA.COLUMNS` and `METADATA.SCHEMAS`). For anything they do not cover,

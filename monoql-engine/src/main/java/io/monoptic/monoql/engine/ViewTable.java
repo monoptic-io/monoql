@@ -50,8 +50,14 @@ final class ViewTable extends AbstractTable implements TranslatableTable {
     this.typeDeriver = typeDeriver;
   }
 
+  /** Derives the row type by validating the definition; fails if it is
+   * no longer valid. */
+  RelDataType rowType() {
+    return typeDeriver.apply(sql, schemaPath);
+  }
+
   @Override public RelDataType getRowType(RelDataTypeFactory typeFactory) {
-    return typeFactory.copyType(typeDeriver.apply(sql, schemaPath));
+    return typeFactory.copyType(rowType());
   }
 
   @Override public RelNode toRel(RelOptTable.ToRelContext context,
