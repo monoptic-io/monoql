@@ -34,6 +34,7 @@ import org.apache.calcite.linq4j.function.NullableLongFunction1;
 import org.apache.calcite.linq4j.function.NullablePredicate2;
 import org.apache.calcite.linq4j.function.Predicate1;
 import org.apache.calcite.linq4j.function.Predicate2;
+import org.apache.calcite.linq4j.tree.ExpressionType;
 
 import com.google.common.base.Suppliers;
 import com.google.common.collect.HashMultiset;
@@ -48,6 +49,7 @@ import org.checkerframework.dataflow.qual.Pure;
 import org.checkerframework.framework.qual.HasQualifierParameter;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.AbstractList;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
@@ -61,6 +63,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -798,13 +801,40 @@ public abstract class EnumerableDefaults {
       Function0<TAccumulate> accumulatorInitializer,
       Function2<TAccumulate, TSource, TAccumulate> accumulatorAdder,
       final Function2<TKey, TAccumulate, TResult> resultSelector) {
+    return groupByMultiple(enumerable, keySelectors, accumulatorInitializer,
+        accumulatorAdder, resultSelector, null);
+  }
+
+  /**
+   * Groups the elements of a sequence according to a list of
+   * specified key selector functions, initializing an accumulator for each
+   * group and adding to it each time an element with the same key is seen.
+   * Creates a result value from each accumulator and its key using a
+   * specified function.
+   *
+   * <p>This method exists to support SQL {@code GROUPING SETS}.
+   * It does not correspond to any method in {@link Enumerable}.
+   *
+   * <p>If {@code emptyGroupKey} is not null, it is the key of the empty
+   * grouping set (the one that aggregates over all input rows, like a query
+   * with no GROUP BY). In that case, a single row is produced for that key
+   * even when the input is empty, just as a query with no GROUP BY returns
+   * a row over empty input.
+   */
+  public static <TSource, TKey, TAccumulate, TResult> Enumerable<TResult> groupByMultiple(
+      Enumerable<TSource> enumerable, List<Function1<TSource, TKey>> keySelectors,
+      Function0<TAccumulate> accumulatorInitializer,
+      Function2<TAccumulate, TSource, TAccumulate> accumulatorAdder,
+      final Function2<TKey, TAccumulate, TResult> resultSelector,
+      @Nullable TKey emptyGroupKey) {
     return groupByMultiple_(
         new HashMap<>(),
         enumerable,
         keySelectors,
         accumulatorInitializer,
         accumulatorAdder,
-        resultSelector);
+        resultSelector,
+        emptyGroupKey);
   }
 
   /**
@@ -1189,9 +1219,12 @@ public abstract class EnumerableDefaults {
       List<Function1<TSource, TKey>> keySelectors,
       Function0<TAccumulate> accumulatorInitializer,
       Function2<TAccumulate, TSource, TAccumulate> accumulatorAdder,
-      final Function2<TKey, TAccumulate, TResult> resultSelector) {
+      final Function2<TKey, TAccumulate, TResult> resultSelector,
+      @Nullable TKey emptyGroupKey) {
+    boolean seenRow = false;
     try (Enumerator<TSource> os = enumerable.enumerator()) {
       while (os.moveNext()) {
+        seenRow = true;
         for (Function1<TSource, TKey> keySelector : keySelectors) {
           TSource o = os.current();
           TKey key = keySelector.apply(o);
@@ -1210,6 +1243,12 @@ public abstract class EnumerableDefaults {
           }
         }
       }
+    }
+    if (!seenRow && emptyGroupKey != null) {
+      // The empty grouping set (the grand total) produces a row even when the
+      // input is empty, just as a query with no GROUP BY does
+      // (see CALCITE-1059).
+      map.put(emptyGroupKey, accumulatorInitializer.apply());
     }
     return new LookupResultEnumerable<>(map, resultSelector);
   }
@@ -2532,6 +2571,50 @@ public abstract class EnumerableDefaults {
   }
 
   /**
+   * Joins pairs that satisfy two inequality predicates.
+   *
+   * <p>Each operator compares a left key with a right key using the
+   * corresponding comparator. Null keys do not match. Both inputs are
+   * materialized and sorted before the first result is returned.
+   *
+   * @throws IllegalArgumentException if either operator is not
+   *     {@link ExpressionType#LessThan}, {@link ExpressionType#LessThanOrEqual},
+   *     {@link ExpressionType#GreaterThan}, or
+   *     {@link ExpressionType#GreaterThanOrEqual}
+   */
+  public static <TLeft, TRight, TKey1, TKey2, TResult>
+      Enumerable<TResult> ieJoin(Enumerable<TLeft> left,
+      Enumerable<TRight> right,
+      Function1<? super TLeft, TKey1> leftKeySelector1,
+      Function1<? super TRight, TKey1> rightKeySelector1,
+      Function1<? super TLeft, TKey2> leftKeySelector2,
+      Function1<? super TRight, TKey2> rightKeySelector2,
+      Comparator<? super TKey1> comparator1,
+      Comparator<? super TKey2> comparator2,
+      ExpressionType operator1, ExpressionType operator2,
+      Function2<? super TLeft, ? super TRight, TResult> resultSelector) {
+    for (ExpressionType operator : Arrays.asList(operator1, operator2)) {
+      switch (operator) {
+      case LessThan:
+      case LessThanOrEqual:
+      case GreaterThan:
+      case GreaterThanOrEqual:
+        break;
+      default:
+        throw new IllegalArgumentException("Unsupported IEJoin operator: " + operator);
+      }
+    }
+    return new AbstractEnumerable<TResult>() {
+      @Override public Enumerator<TResult> enumerator() {
+        return new IEJoinEnumerator<>(left, right,
+            leftKeySelector1, rightKeySelector1,
+            leftKeySelector2, rightKeySelector2,
+            comparator1, comparator2, operator1, operator2, resultSelector);
+      }
+    };
+  }
+
+  /**
    * Correlates the elements of two sequences based on a predicate.
    */
   public static <TSource, TInner, TResult> Enumerable<TResult> nestedLoopJoin(
@@ -3243,26 +3326,43 @@ public abstract class EnumerableDefaults {
       Function1<TSource, TKey> keySelector,
       Comparator<TKey> comparator,
       int offset, int fetch) {
+    return orderBy(source, keySelector, comparator,
+        BigDecimal.valueOf(offset), BigDecimal.valueOf(fetch));
+  }
+
+  /**
+   * A sort implementation optimized for a sort with a fetch size (LIMIT).
+   *
+   * @param offset how many rows are skipped from the sorted output.
+   *               Must be greater than or equal to 0.
+   * @param fetch how many rows are retrieved. Must be greater than or equal to 0.
+   */
+  public static <TSource, TKey> Enumerable<TSource> orderBy(
+      Enumerable<TSource> source,
+      Function1<TSource, TKey> keySelector,
+      Comparator<TKey> comparator,
+      BigDecimal offset, BigDecimal fetch) {
     // As discussed in CALCITE-3920 and CALCITE-4157, this method avoids to sort the complete input,
     // if only the first N rows are actually needed. A TreeMap implementation has been chosen,
     // so that it behaves similar to the orderBy method without fetch/offset.
     // The TreeMap has a better performance if there are few distinct sort keys.
     return new AbstractEnumerable<TSource>() {
       @Override public Enumerator<TSource> enumerator() {
-        if (fetch == 0) {
+        if (fetch.compareTo(BigDecimal.ZERO) <= 0) {
           return Linq4j.emptyEnumerator();
         }
 
         TreeMap<TKey, List<TSource>> map = new TreeMap<>(comparator);
-        long size = 0;
-        long needed = fetch + (long) offset;
+        BigDecimal size = BigDecimal.ZERO;
+        BigDecimal actualOffset = offset.max(BigDecimal.ZERO);
+        BigDecimal needed = rowsRequired(actualOffset).add(rowsRequired(fetch));
 
         // read the input into a tree map
         try (Enumerator<TSource> os = source.enumerator()) {
           while (os.moveNext()) {
             TSource o = os.current();
             TKey key = keySelector.apply(o);
-            if (needed >= 0 && size >= needed) {
+            if (needed.signum() >= 0 && size.compareTo(needed) >= 0) {
               // the current row will never appear in the output, so just skip it
               @KeyFor("map") TKey lastKey = map.lastKey();
               if (comparator.compare(key, lastKey) >= 0) {
@@ -3276,7 +3376,7 @@ public abstract class EnumerableDefaults {
               } else {
                 l.remove(l.size() - 1);
               }
-              size--;
+              size = size.subtract(BigDecimal.ONE);
             }
             // add the current element to the map
             map.compute(key, (k, l) -> {
@@ -3291,24 +3391,30 @@ public abstract class EnumerableDefaults {
               l.add(o);
               return l;
             });
-            size++;
+            size = size.add(BigDecimal.ONE);
           }
         }
 
         // skip the first 'offset' rows by deleting them from the map
-        if (offset > 0) {
-          // search the key up to (but excluding) which we have to remove entries from the map
-          int skipped = 0;
+        if (actualOffset.compareTo(BigDecimal.ZERO) > 0) {
+          // search the key up to which we have to remove entries from the map
+          BigDecimal skipped = BigDecimal.ZERO;
+          BigDecimal rowsToSkip = rowsRequired(actualOffset);
           TKey until = (TKey) DUMMY;
+          boolean removeUntilInclusive = false;
           for (Map.Entry<TKey, List<TSource>> e : map.entrySet()) {
-            skipped += e.getValue().size();
+            skipped = skipped.add(BigDecimal.valueOf(e.getValue().size()));
 
-            if (skipped > offset) {
+            if (skipped.compareTo(rowsToSkip) >= 0) {
               // we might need to remove entries from the list
               List<TSource> l = e.getValue();
-              int toKeep = skipped - offset;
-              if (toKeep < l.size()) {
-                l.subList(0, l.size() - toKeep).clear();
+              BigDecimal toKeep = skipped.subtract(rowsToSkip);
+              if (toKeep.compareTo(BigDecimal.valueOf(l.size())) < 0) {
+                if (toKeep.signum() == 0) {
+                  removeUntilInclusive = true;
+                } else {
+                  l.subList(0, l.size() - toKeep.intValueExact()).clear();
+                }
               }
 
               until = e.getKey();
@@ -3319,7 +3425,7 @@ public abstract class EnumerableDefaults {
             // the offset is bigger than the number of rows in the map
             return Linq4j.emptyEnumerator();
           }
-          map.headMap(until, false).clear();
+          map.headMap(until, removeUntilInclusive).clear();
         }
 
         return new LookupImpl<>(map).valuesEnumerable().enumerator();
@@ -3789,6 +3895,10 @@ public abstract class EnumerableDefaults {
     return toRet;
   }
 
+  private static BigDecimal rowsRequired(BigDecimal count) {
+    return count.max(BigDecimal.ZERO).setScale(0, RoundingMode.CEILING);
+  }
+
   /**
    * Bypasses a specified number of elements in a
    * sequence and then returns the remaining elements.
@@ -3798,6 +3908,18 @@ public abstract class EnumerableDefaults {
     return skipWhile(source, (v1, v2) -> {
       // Count is 1-based
       return v2 < count;
+    });
+  }
+
+  /**
+   * Bypasses a specified number of elements in a
+   * sequence and then returns the remaining elements.
+   */
+  public static <TSource> Enumerable<TSource> skip(Enumerable<TSource> source,
+      final BigDecimal count) {
+    return skipWhileBigDecimal(source, (v1, v2) -> {
+      // Count is 1-based
+      return v2.compareTo(count) < 0;
     });
   }
 
@@ -3957,6 +4079,19 @@ public abstract class EnumerableDefaults {
   }
 
   /**
+   * Returns a specified number of contiguous elements
+   * from the start of a sequence.
+   */
+  public static <TSource> Enumerable<TSource> take(Enumerable<TSource> source,
+      final BigDecimal count) {
+    return takeWhileBigDecimal(
+        source, (v1, v2) -> {
+          // Count is 1-based
+          return v2.compareTo(count) < 0;
+        });
+  }
+
+  /**
    * Returns elements from a sequence as long as a
    * specified condition is true.
    */
@@ -3992,6 +4127,36 @@ public abstract class EnumerableDefaults {
     return new AbstractEnumerable<TSource>() {
       @Override public Enumerator<TSource> enumerator() {
         return new TakeWhileLongEnumerator<>(source.enumerator(), predicate);
+      }
+    };
+  }
+
+  /**
+   * Returns elements from a sequence as long as a
+   * specified condition is true. The element's index is used in the
+   * logic of the predicate function.
+   */
+  public static <TSource> Enumerable<TSource> takeWhileBigDecimal(
+      final Enumerable<TSource> source,
+      final Predicate2<TSource, BigDecimal> predicate) {
+    return new AbstractEnumerable<TSource>() {
+      @Override public Enumerator<TSource> enumerator() {
+        return new TakeWhileBigDecimalEnumerator<>(source.enumerator(), predicate);
+      }
+    };
+  }
+
+  /**
+   * Bypasses elements in a sequence as long as a
+   * specified condition is true. The element's index is used in the
+   * logic of the predicate function.
+   */
+  public static <TSource> Enumerable<TSource> skipWhileBigDecimal(
+      final Enumerable<TSource> source,
+      final Predicate2<TSource, BigDecimal> predicate) {
+    return new AbstractEnumerable<TSource>() {
+      @Override public Enumerator<TSource> enumerator() {
+        return new SkipWhileBigDecimalEnumerator<>(source.enumerator(), predicate);
       }
     };
   }
@@ -4375,7 +4540,7 @@ public abstract class EnumerableDefaults {
     return source instanceof OrderedQueryable
         ? ((OrderedQueryable<T>) source)
         : new EnumerableOrderedQueryable<>(
-            source, (Class) Object.class, requireNonNull(null, "null"), null);
+            source, (Class) Object.class, Linq4j.DEFAULT_PROVIDER, null);
   }
 
   /** Default implementation of {@link ExtendedEnumerable#into(Collection)}. */
@@ -4397,6 +4562,40 @@ public abstract class EnumerableDefaults {
     source.into(tempList);
     sink.removeAll(tempList);
     return sink;
+  }
+
+  /**
+   * Default implementation of
+   * {@link ExtendedEnumerable#update(List, Function1, Function1, Function1)}.
+   *
+   * <p>Builds a map from source-row keys to replacement rows in a single pass
+   * over the source, then performs a single pass over the sink, replacing
+   * matched rows in place.
+   */
+  public static <T, TKey> long update(
+      Enumerable<T> source,
+      List<T> sink,
+      Function1<T, TKey> sinkKeySelector,
+      Function1<T, TKey> sourceKeySelector,
+      Function1<T, T> sourceTransform) {
+    final Map<TKey, T> updateMap = new HashMap<>();
+    try (Enumerator<T> e = source.enumerator()) {
+      while (e.moveNext()) {
+        final T row = e.current();
+        updateMap.put(sourceKeySelector.apply(row), sourceTransform.apply(row));
+      }
+    }
+    long updateCount = 0;
+    final ListIterator<T> it = sink.listIterator();
+    while (it.hasNext()) {
+      final T current = it.next();
+      final T newRow = updateMap.get(sinkKeySelector.apply(current));
+      if (newRow != null) {
+        it.set(newRow);
+        updateCount++;
+      }
+    }
+    return updateCount;
   }
 
   /**
@@ -4542,6 +4741,50 @@ public abstract class EnumerableDefaults {
     }
   }
 
+  /** Enumerable that implements take-while.
+   *
+   * @param <TSource> element type */
+  static class TakeWhileBigDecimalEnumerator<TSource> implements Enumerator<TSource> {
+    private final Enumerator<TSource> enumerator;
+    private final Predicate2<TSource, BigDecimal> predicate;
+
+    boolean done = false;
+    BigDecimal n = BigDecimal.valueOf(-1);
+
+    TakeWhileBigDecimalEnumerator(Enumerator<TSource> enumerator,
+        Predicate2<TSource, BigDecimal> predicate) {
+      this.enumerator = enumerator;
+      this.predicate = predicate;
+    }
+
+    @Override public TSource current() {
+      return enumerator.current();
+    }
+
+    @Override public boolean moveNext() {
+      if (!done) {
+        if (enumerator.moveNext()) {
+          n = n.add(BigDecimal.ONE);
+          if (predicate.apply(enumerator.current(), n)) {
+            return true;
+          }
+        }
+        done = true;
+      }
+      return false;
+    }
+
+    @Override public void reset() {
+      enumerator.reset();
+      done = false;
+      n = BigDecimal.valueOf(-1);
+    }
+
+    @Override public void close() {
+      enumerator.close();
+    }
+  }
+
   /** Enumerator that implements skip-while.
    *
    * @param <TSource> element type */
@@ -4581,6 +4824,53 @@ public abstract class EnumerableDefaults {
       enumerator.reset();
       started = false;
       n = -1;
+    }
+
+    @Override public void close() {
+      enumerator.close();
+    }
+  }
+
+  /** Enumerator that implements skip-while.
+   *
+   * @param <TSource> element type */
+  static class SkipWhileBigDecimalEnumerator<TSource> implements Enumerator<TSource> {
+    private final Enumerator<TSource> enumerator;
+    private final Predicate2<TSource, BigDecimal> predicate;
+
+    boolean started = false;
+    BigDecimal n = BigDecimal.valueOf(-1);
+
+    SkipWhileBigDecimalEnumerator(Enumerator<TSource> enumerator,
+        Predicate2<TSource, BigDecimal> predicate) {
+      this.enumerator = enumerator;
+      this.predicate = predicate;
+    }
+
+    @Override public TSource current() {
+      return enumerator.current();
+    }
+
+    @Override public boolean moveNext() {
+      for (;;) {
+        if (!enumerator.moveNext()) {
+          return false;
+        }
+        if (started) {
+          return true;
+        }
+        n = n.add(BigDecimal.ONE);
+        if (!predicate.apply(enumerator.current(), n)) {
+          started = true;
+          return true;
+        }
+      }
+    }
+
+    @Override public void reset() {
+      enumerator.reset();
+      started = false;
+      n = BigDecimal.valueOf(-1);
     }
 
     @Override public void close() {
@@ -4670,32 +4960,35 @@ public abstract class EnumerableDefaults {
     }
 
     @Override public Set<Entry<@KeyFor("this") K, V>> entrySet() {
-      return new AbstractSet<Entry<@KeyFor("this") K, V>>() {
-        @SuppressWarnings("override.return.invalid")
-        @Override public Iterator<Entry<K, V>> iterator() {
-          final Iterator<Entry<Wrapped<K>, V>> iterator =
-              map.entrySet().iterator();
+      return new WrapMapEntrySet();
+    }
 
-          return new Iterator<Entry<K, V>>() {
-            @Override public boolean hasNext() {
-              return iterator.hasNext();
-            }
+    /** EntrySet for {@link WrapMap}. */
+    private class WrapMapEntrySet extends AbstractSet<Entry<@KeyFor("this") K, V>> {
+      @SuppressWarnings("override.return.invalid")
+      @Override public Iterator<Entry<K, V>> iterator() {
+        final Iterator<Entry<Wrapped<K>, V>> iterator =
+            map.entrySet().iterator();
 
-            @Override public Entry<K, V> next() {
-              Entry<Wrapped<K>, V> next = iterator.next();
-              return new SimpleEntry<>(next.getKey().element, next.getValue());
-            }
+        return new Iterator<Entry<K, V>>() {
+          @Override public boolean hasNext() {
+            return iterator.hasNext();
+          }
 
-            @Override public void remove() {
-              iterator.remove();
-            }
-          };
-        }
+          @Override public Entry<K, V> next() {
+            Entry<Wrapped<K>, V> next = iterator.next();
+            return new SimpleEntry<>(next.getKey().element, next.getValue());
+          }
 
-        @Override public int size() {
-          return map.size();
-        }
-      };
+          @Override public void remove() {
+            iterator.remove();
+          }
+        };
+      }
+
+      @Override public int size() {
+        return map.size();
+      }
     }
 
     @SuppressWarnings("contracts.conditional.postcondition.not.satisfied")
@@ -5129,6 +5422,30 @@ public abstract class EnumerableDefaults {
     @Override public synchronized Throwable fillInStackTrace() {
       return this;
     }
+  }
+
+  /** Compares merge join keys, optionally rejecting equal keys containing NULL fields.
+   * Checks fields only after comparing keys, so unequal keys retain their sort order. */
+  public static <T> int compareObjectsNullsLastForMergeJoin(@Nullable T v0,
+      @Nullable T v1, Comparator<? super T> comparator,
+      @Nullable Predicate1<? super T> containsNull) {
+    if (v0 == null && v1 == null) {
+      throw new BothValuesAreNullException();
+    }
+    if (v0 == null) {
+      return 1;
+    }
+    if (v1 == null) {
+      return -1;
+    }
+    final int c = comparator.compare(v0, v1);
+    // Equal keys have matching NULL fields, so checking one side is enough.
+    if (c == 0 && containsNull != null && containsNull.apply(v0)) {
+      // A ROW containing NULL cannot match: use the same signal as two NULL keys
+      // so merge join advances without emitting a match.
+      throw new BothValuesAreNullException();
+    }
+    return c;
   }
 
   public static int compareNullsLastForMergeJoin(@Nullable Comparable v0, @Nullable Comparable v1) {

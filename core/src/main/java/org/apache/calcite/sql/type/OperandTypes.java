@@ -57,6 +57,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -1133,15 +1134,19 @@ public abstract class OperandTypes {
    * Operand type-checking strategy where two operands must both be in the
    * same string type family.
    */
+  private static final ImmutableList<SqlTypeFamily> STRING_SUB_FAMILIES =
+      ImmutableList.of(SqlTypeFamily.CHARACTER, SqlTypeFamily.BINARY);
   public static final SqlSingleOperandTypeChecker STRING_SAME_SAME =
-      STRING_STRING.and(SAME_SAME);
+      withSignatureGenerator(STRING_STRING.and(SAME_SAME),
+          sameSubFamilySignatureGenerator(2, STRING_SUB_FAMILIES));
 
   /**
    * Operand type-checking strategy where three operands must all be in the
    * same string type family.
    */
   public static final SqlSingleOperandTypeChecker STRING_SAME_SAME_SAME =
-      STRING_STRING_STRING.and(SAME_SAME_SAME);
+      withSignatureGenerator(STRING_STRING_STRING.and(SAME_SAME_SAME),
+          sameSubFamilySignatureGenerator(3, STRING_SUB_FAMILIES));
 
   public static final SqlSingleOperandTypeChecker STRING_STRING_INTEGER =
       family(SqlTypeFamily.STRING, SqlTypeFamily.STRING, SqlTypeFamily.INTEGER);
@@ -1192,8 +1197,8 @@ public abstract class OperandTypes {
    * same string type family and last type is INTEGER.
    */
   public static final SqlSingleOperandTypeChecker STRING_SAME_SAME_INTEGER =
-      STRING_STRING_INTEGER.and(SAME_SAME_INTEGER);
-
+      withSignatureGenerator(STRING_STRING_INTEGER.and(SAME_SAME_INTEGER),
+          sameSubFamilySignatureGenerator(2, STRING_SUB_FAMILIES, SqlTypeFamily.INTEGER));
   public static final SqlSingleOperandTypeChecker STRING_SAME_SAME_OR_ARRAY_SAME_SAME =
       or(STRING_SAME_SAME,
           and(OperandTypes.SAME_SAME, family(SqlTypeFamily.ARRAY, SqlTypeFamily.ARRAY)));
@@ -1239,9 +1244,15 @@ public abstract class OperandTypes {
       new SqlOperandTypeChecker() {
         @Override public boolean checkOperandTypes(SqlCallBinding callBinding,
             boolean throwOnFailure) {
-          getOperandCountRange().isValidCount(callBinding.getOperandCount());
-          RelDataType type = callBinding.getOperandType(1);
-          return type.getComparability() == RelDataTypeComparability.ALL;
+          if (getOperandCountRange().isValidCount(callBinding.getOperandCount())
+              && callBinding.getOperandType(1).getComparability()
+                  == RelDataTypeComparability.ALL) {
+            return true;
+          }
+          if (throwOnFailure) {
+            throw callBinding.newValidationSignatureError();
+          }
+          return false;
         }
 
         @Override public SqlOperandCountRange getOperandCountRange() {
@@ -1417,11 +1428,28 @@ public abstract class OperandTypes {
             SqlCallBinding callBinding,
             boolean throwOnFailure) {
           // The first operand must be an array type
-          ARRAY.checkSingleOperandType(callBinding, callBinding.operand(0), 0, throwOnFailure);
+          if (!ARRAY.checkSingleOperandType(callBinding, callBinding.operand(0), 0,
+              throwOnFailure)) {
+            return false;
+          }
           final RelDataType arrayType =
               SqlTypeUtil.deriveType(callBinding, callBinding.operand(0));
-          final RelDataType componentType =
-              requireNonNull(arrayType.getComponentType(), "componentType");
+          RelDataType componentType = arrayType.getComponentType();
+          if (componentType == null) {
+            // The ARRAY family check above accepts operands of type ANY and
+            // untyped NULL literals, which have no component type.
+            if (arrayType.getSqlTypeName() == SqlTypeName.ANY) {
+              // This is probably a parameter of an enclosing lambda, whose type has
+              // not been inferred yet.  Accept for now; the enclosing function's checker
+              // will re-validated the lambda body with concrete parameter types, which runs
+              // this checker again.
+              return true;
+            }
+            // Untyped NULL literal: an unknown array whose elements are also
+            // NULL; the call returns NULL.
+            componentType =
+                callBinding.getTypeFactory().createSqlType(SqlTypeName.NULL);
+          }
 
           // The second operand is a function(array_element_type)->boolean type
           LambdaRelOperandTypeChecker lambdaChecker =
@@ -1482,6 +1510,75 @@ public abstract class OperandTypes {
       return !validationError;
     }
   }
+  /**
+   * Wraps a {@link SqlSingleOperandTypeChecker}, overriding only its
+   * {@link SqlOperandTypeChecker#getAllowedSignatures}, while delegating
+   * everything else unchanged. Used instead of
+   * {@link CompositeOperandTypeChecker#withGenerator}, which always returns
+   * a plain {@link CompositeOperandTypeChecker} and would lose single-operand
+   * checking.
+   */
+  private static SqlSingleOperandTypeChecker withSignatureGenerator(
+      SqlSingleOperandTypeChecker checker,
+      BiFunction<SqlOperator, String, String> signatureGenerator) {
+    return new SqlSingleOperandTypeChecker() {
+      @Override public boolean checkSingleOperandType(SqlCallBinding callBinding,
+          SqlNode operand, int iFormalOperand, boolean throwOnFailure) {
+        // STRING_SAME_SAME-style checkers evaluate family membership AND
+        // cross-operand comparability together; there's no meaningful way to
+        // validate a single operand in isolation, so fall back to the full
+        // multi-operand check.
+        return checker.checkOperandTypes(callBinding, throwOnFailure);
+      }
+
+      @Override public boolean checkOperandTypes(SqlCallBinding callBinding,
+          boolean throwOnFailure) {
+        // Explicitly override rather than relying on the interface default
+        // (which would route through checkSingleOperandType(operand(0), 0)
+        // and only ever check the first operand).
+        return checker.checkOperandTypes(callBinding, throwOnFailure);
+      }
+
+      @Override public SqlOperandCountRange getOperandCountRange() {
+        return checker.getOperandCountRange();
+      }
+
+      @Override public boolean isOptional(int i) {
+        return checker.isOptional(i);
+      }
+
+      @Override public Consistency getConsistency() {
+        return checker.getConsistency();
+      }
+
+      @Override public String getAllowedSignatures(SqlOperator op, String opName) {
+        return signatureGenerator.apply(op, opName);
+      }
+    };
+  }
+
+  /**
+   * Builds an error-message generator that lists one candidate signature per
+   * given sub-family, each repeated across the "same" operand positions,
+   * followed by any trailing fixed families (see CALCITE-7749).
+   */
+  private static BiFunction<SqlOperator, String, String> sameSubFamilySignatureGenerator(
+      int sameOperandCount, List<SqlTypeFamily> subFamilies,
+      SqlTypeFamily... trailingFamilies) {
+    return (op, opName) ->
+        subFamilies.stream()
+            .map(subFamily -> {
+              List<String> form = new ArrayList<>();
+              for (int i = 0; i < sameOperandCount; i++) {
+                form.add(subFamily.name());
+              }
+              for (SqlTypeFamily family : trailingFamilies) {
+                form.add(family.name());
+              }
+              return SqlUtil.getAliasedSignature(op, opName, form);
+            })
+            .collect(Collectors.joining(SqlOperator.NL));
+  }
 
   /** Checker that returns whether a value is a collection (multiset or array)
    * of scalar or record values. */
@@ -1535,7 +1632,7 @@ public abstract class OperandTypes {
 
         @Override public String getAllowedSignatures(SqlOperator op, String opName) {
           return SqlUtil.getAliasedSignature(op, opName,
-              ImmutableList.of("RECORDTYPE(SINGLE FIELD)"));
+              ImmutableList.of("ROW(SINGLE FIELD)"));
         }
       };
 
@@ -1561,7 +1658,7 @@ public abstract class OperandTypes {
 
     @Override public String getAllowedSignatures(SqlOperator op, String opName) {
       return SqlUtil.getAliasedSignature(op, opName,
-          ImmutableList.of("ARRAY<RECORDTYPE(TWO FIELDS)>"));
+          ImmutableList.of("ARRAY<ROW(TWO FIELDS)>"));
     }
   }
 
@@ -1948,6 +2045,40 @@ public abstract class OperandTypes {
   /**
    * Abstract base class for type-checking strategies involving lambda expressions.
    * This class provides common functionality for checking the type of lambda expression.
+   *
+   * <p>Lambda expressions are validated in two passes, and operand checkers of
+   * functions that accept lambda operands (higher-order functions) must be
+   * written with both passes in mind.  For example, consider validating
+   *
+   * <blockquote>{@code
+   * EXISTS(array[array[1, 2]], a -> EXISTS(a, b -> b > 1))
+   * }</blockquote>
+   *
+   * <ol>
+   * <li>Deriving the type of the outer call starts by deriving the types of
+   * its operands.  The type of the outer lambda is derived by validating its
+   * body with parameter {@code a} set to the nullable ANY type, the default
+   * that {@link org.apache.calcite.sql.validate.SqlLambdaScope} assigns while
+   * the parameter types are still unknown.  During this pass the checker of
+   * the <em>inner</em> {@code EXISTS} call runs and sees its array operand
+   * {@code a} typed as ANY.  It cannot check anything meaningful yet, so it
+   * must accept the call provisionally instead of failing; definitive checking
+   * happens in the second pass.
+   *
+   * <li>The checker of the <em>outer</em> {@code EXISTS} then computes the
+   * concrete type of {@code a} from the component type of its array operand
+   * {@code array[array[1, 2]]}, namely {@code INTEGER ARRAY}; stores it in the
+   * lambda's {@code SqlLambdaScope}; discards the types derived during the
+   * first pass (see {@code TypeRemover}); and calls
+   * {@link org.apache.calcite.sql.validate.SqlValidator#validateLambda} to
+   * re-validate the body.  This re-runs the checker of the inner
+   * {@code EXISTS}, which now sees {@code a} as {@code INTEGER ARRAY} and
+   * repeats the same protocol for the inner lambda, typing {@code b} as
+   * {@code INTEGER}.
+   * </ol>
+   *
+   * <p>See {@link OperandTypes#EXISTS} for a checker that follows this
+   * protocol.
    */
   private abstract static class LambdaOperandTypeChecker
       implements SqlSingleOperandTypeChecker {

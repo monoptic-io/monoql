@@ -19,6 +19,7 @@ package org.apache.calcite.test;
 import org.apache.calcite.avatica.util.ByteString;
 import org.apache.calcite.avatica.util.DateTimeUtils;
 import org.apache.calcite.config.CalciteConnectionProperty;
+import org.apache.calcite.config.CalciteSystemProperty;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.function.Function1;
 import org.apache.calcite.linq4j.function.Function2;
@@ -405,6 +406,84 @@ public class SqlOperatorTest {
     }
   }
 
+  @Test void testFPSpecialValues() {
+    SqlOperatorFixture f = fixture();
+    f.checkScalarApprox("CAST('Infinity' AS REAL)",
+        "REAL NOT NULL", "Infinity");
+    f.checkScalarApprox("CAST('Infinity' AS DOUBLE)",
+        "DOUBLE NOT NULL", "Infinity");
+    f.checkScalarApprox("CAST('Infinity' AS FLOAT)",
+        "FLOAT NOT NULL", "Infinity");
+    f.checkScalarApprox("CAST('-Infinity' AS REAL)",
+        "REAL NOT NULL", "-Infinity");
+    f.checkScalarApprox("CAST('-Infinity' AS DOUBLE)",
+        "DOUBLE NOT NULL", "-Infinity");
+    f.checkScalarApprox("CAST('-Infinity' AS FLOAT)",
+        "FLOAT NOT NULL", "-Infinity");
+    // Note: IEEE 754 specifies that there are several types of NaN: quiet and signaling.
+    // There is however only one way to write them.
+    // But when compared for equality they may not match.
+    f.checkScalarApprox("CAST('NaN' AS REAL)",
+        "REAL NOT NULL", "NaN");
+    f.checkScalarApprox("CAST('NaN' AS DOUBLE)",
+        "DOUBLE NOT NULL", "NaN");
+    f.checkScalarApprox("CAST('NaN' AS FLOAT)",
+        "FLOAT NOT NULL", "NaN");
+    // [CALCITE-6059] Optimizer does not correctly handle
+    // special floating point value -0.0E0
+    // The matcher is(-0.0d) checks the value bit-exactly:
+    // Double.equals distinguishes -0.0 from 0.0.
+    f.checkScalarApprox("CAST('-0E0' AS REAL)",
+        "REAL NOT NULL", is(-0.0d));
+    f.checkScalarApprox("CAST('-0E0' AS DOUBLE)",
+        "DOUBLE NOT NULL", is(-0.0d));
+    f.checkScalarApprox("CAST('-0E0' AS FLOAT)",
+        "FLOAT NOT NULL", is(-0.0d));
+    f.checkScalarApprox("CAST('0E0' AS REAL)",
+        "REAL NOT NULL", is(0.0d));
+    f.checkScalarApprox("CAST('0E0' AS DOUBLE)",
+        "DOUBLE NOT NULL", is(0.0d));
+    f.checkScalarApprox("CAST('0E0' AS FLOAT)",
+        "FLOAT NOT NULL", is(0.0d));
+    // Casting an approximate numeric to VARCHAR uses E notation,
+    // and must preserve the sign of a negative zero
+    f.checkString("CAST(CAST('-0E0' AS REAL) AS VARCHAR)",
+        "-0E0", "VARCHAR NOT NULL");
+    f.checkString("CAST(CAST('-0E0' AS DOUBLE) AS VARCHAR)",
+        "-0E0", "VARCHAR NOT NULL");
+    f.checkString("CAST(CAST('0E0' AS REAL) AS VARCHAR)",
+        "0E0", "VARCHAR NOT NULL");
+    f.checkString("CAST(CAST('0E0' AS DOUBLE) AS VARCHAR)",
+        "0E0", "VARCHAR NOT NULL");
+    // A nullable value is boxed at runtime; formatting must not depend
+    // on nullability. RAND() prevents constant folding, so the CAST
+    // executes at runtime on the boxed value.
+    f.checkString("CAST(CASE WHEN RAND() >= 0 THEN 0.0E0 ELSE NULL END"
+            + " AS VARCHAR)",
+        "0E0", "VARCHAR");
+    // An array element is a boxed Double in the generated code
+    f.checkString("CAST(ARRAY[-0.0E0][1] AS VARCHAR)",
+        "-0E0", "VARCHAR");
+    // 1/-0.0 = -Infinity: proves that the sign of the zero
+    // survives arithmetic at runtime.
+    f.checkScalarApprox("1E0 / CAST('-0E0' AS REAL)",
+        "DOUBLE NOT NULL", "-Infinity");
+    f.checkScalarApprox("1E0 / CAST('-0E0' AS DOUBLE)",
+        "DOUBLE NOT NULL", "-Infinity");
+    f.checkScalarApprox("1E0 / CAST('0E0' AS DOUBLE)",
+        "DOUBLE NOT NULL", "Infinity");
+    // A negative zero written as a literal, rather than computed by a CAST
+    f.checkScalarApprox("1E0 / -0.0E0",
+        "DOUBLE NOT NULL", "-Infinity");
+    f.checkString("CAST(-0.0E0 AS VARCHAR)",
+        "-0E0", "VARCHAR NOT NULL");
+    // In comparisons -0.0 is equal to 0.0, so casting either to
+    // BOOLEAN yields FALSE
+    f.checkBoolean("CAST(CAST('-0E0' AS DOUBLE) AS BOOLEAN)", false);
+    f.checkBoolean("CAST(CAST('-0E0' AS REAL) AS BOOLEAN)", false);
+    f.checkBoolean("CAST(-0.0E0 AS BOOLEAN)", false);
+  }
+
   @Test void testBetween() {
     final SqlOperatorFixture f = fixture();
     f.setFor(SqlStdOperatorTable.BETWEEN, VmName.EXPAND);
@@ -435,6 +514,39 @@ public class SqlOperatorTest {
         true);
     f.checkBoolean("x'0A00015A' between x'0A0001A0' and x'0A0001B0'",
         false);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7716">[CALCITE-7716]
+   * BETWEEN/range predicates on UUID literals give wrong results because
+   * RexSimplify orders bounds using java.util.UUID#compareTo (signed
+   * comparison)</a>. Results depend on
+   * {@link CalciteSystemProperty#UUID_UNSIGNED_COMPARISON}. */
+  @Test void testUuidBetween() {
+    final SqlOperatorFixture f = fixture();
+    final String mid = "UUID '8ba7b810-9dad-11d1-80b4-00c04fd430c8'";
+    final String min = "UUID '00000000-0000-0000-0000-000000000000'";
+    final String max = "UUID 'ffffffff-ffff-ffff-ffff-ffffffffffff'";
+    final boolean unsigned =
+        CalciteSystemProperty.UUID_UNSIGNED_COMPARISON.value();
+
+    // Under signed ordering 'ffffffff-...' compares as less than
+    // '00000000-...', so the range is empty and BETWEEN folds to FALSE.
+    f.checkBoolean(mid + " between " + min + " and " + max, unsigned);
+    f.checkBoolean(min + " between " + min + " and " + max, unsigned);
+    f.checkBoolean(max + " between " + min + " and " + max, unsigned);
+    f.checkBoolean(mid + " not between " + min + " and " + max, !unsigned);
+    f.checkBoolean(mid + " > " + min, unsigned);
+    f.checkBoolean(max + " < " + min, !unsigned);
+
+    // IN, NOT IN and IS DISTINCT FROM also build Sargs, but compare by
+    // equality, so their results do not depend on the ordering.
+    f.checkBoolean(mid + " in (" + min + ", " + max + ")", false);
+    f.checkBoolean(max + " in (" + min + ", " + max + ")", true);
+    f.checkBoolean(mid + " not in (" + min + ", " + max + ")", true);
+    f.checkBoolean(max + " not in (" + min + ", " + max + ")", false);
+    f.checkBoolean(max + " is distinct from " + min, true);
+    f.checkBoolean(max + " is not distinct from " + max, true);
   }
 
   /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-3522">
@@ -1782,6 +1894,100 @@ public class SqlOperatorTest {
     }
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7865">[CALCITE-7865]
+   * CASTS from string trim in inconsistent ways</a>. */
+  @ParameterizedTest
+  @MethodSource("safeParameters")
+  void testCastFromStringTrim(CastType castType, SqlOperatorFixture f) {
+    f.setFor(SqlStdOperatorTable.CAST, VmName.EXPAND);
+    // Target type, and a valid string for that type
+    final String[][] casts = {
+        {"TINYINT", "1"},
+        {"SMALLINT", "1"},
+        {"INTEGER", "1"},
+        {"BIGINT", "1"},
+        {"TINYINT UNSIGNED", "1"},
+        {"SMALLINT UNSIGNED", "1"},
+        {"INTEGER UNSIGNED", "1"},
+        {"BIGINT UNSIGNED", "1"},
+        {"REAL", "1.5"},
+        {"DOUBLE", "1.5"},
+        {"DECIMAL(5, 2)", "1.5"},
+        {"BOOLEAN", "true"},
+        {"DATE", "2020-01-02"},
+        {"TIME", "10:11:12"},
+        {"TIMESTAMP", "2020-01-02 10:11:12"},
+        {"TIME WITH LOCAL TIME ZONE", "10:11:12 UTC"},
+        {"TIMESTAMP WITH LOCAL TIME ZONE", "2020-01-02 10:11:12 UTC"},
+        {"INTERVAL DAY", "3"},
+    };
+    for (String[] cast : casts) {
+      final String type = cast[0];
+      final String value = cast[1];
+      // Each cast removes leading and trailing characters up to U+0020,
+      // as String.trim does
+      for (String c : new String[] {"\\0009", "\\000A", "\\001F", "\\0020"}) {
+        f.checkBoolean("cast(U&'" + c + value + c + "' as " + type + ")"
+            + " = cast('" + value + "' as " + type + ")", true);
+      }
+      if (castType != CastType.CAST) {
+        // No cast removes U+00A0 (no-break space), which is above U+0020
+        f.checkNull("cast(U&'\\00A0" + value + "' as " + type + ")");
+      }
+    }
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7866">[CALCITE-7866]
+   * CASTS from string values accept Java idioms which are not legal in
+   * SQL</a>. */
+  @ParameterizedTest
+  @MethodSource("safeParameters")
+  void testCastFromStringJavaIdiom(CastType castType, SqlOperatorFixture f) {
+    f.setFor(SqlStdOperatorTable.CAST, VmName.EXPAND);
+    // Negative tests: casts should fail
+    // A string that is legal in Java but not in SQL, and the target type
+    final String[][] casts = {
+        // Type suffix on a Java number
+        {"1.5d", "DOUBLE"},
+        {"1.5f", "REAL"},
+        // Hexadecimal floating-point number
+        {"0x1p3", "DOUBLE"},
+        // Character.digit accepts U+0667, ARABIC-INDIC DIGIT SEVEN
+        {"\\0667", "TINYINT"},
+        {"\\0667", "SMALLINT"},
+        {"\\0667", "INTEGER"},
+        {"\\0667", "BIGINT"},
+        {"\\0667", "INTEGER UNSIGNED"},
+        {"\\0667", "BIGINT UNSIGNED"},
+        {"\\0667", "DECIMAL(5, 2)"},
+        {"\\0667", "INTERVAL DAY"},
+        // equalsIgnoreCase upper-cases U+017F, LATIN SMALL LETTER LONG S, to S
+        {"fal\\017Fe", "BOOLEAN"},
+    };
+    for (String[] cast : casts) {
+      final String value = cast[0];
+      final String type = cast[1];
+      final String expression = "cast(U&'" + value + "' as " + type + ")";
+      if (castType == CastType.CAST) {
+        f.checkFails(expression,
+            type.equals("BOOLEAN")
+                ? "Invalid character for cast.*"
+                : WRONG_FORMAT_MESSAGE,
+            true);
+      } else {
+        f.checkNull(expression);
+      }
+    }
+
+    // Each part of the SQL syntax for a number still converts
+    f.checkBoolean("cast('+1.5E+1' as double) = 15", true);
+    f.checkBoolean("cast('-.25e1' as real) = -2.5e0", true);
+    f.checkBoolean("cast('5.' as decimal(5, 2)) = 5", true);
+    f.checkBoolean("cast('+7' as tinyint) = 7", true);
+  }
+
   @Test void testCastToDecimal() {
     final SqlOperatorFixture f = fixture();
     // test the minimum scale is 0
@@ -1841,6 +2047,39 @@ public class SqlOperatorTest {
     f.checkNull("cast(null as row(f0 integer, f1 decimal(2,0)))");
     f.checkNull("cast(null as row(f0 integer, f1 varchar))");
     f.checkNull("cast(null as row(f0 varchar, f1 varchar))");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7658">
+   * [CALCITE-7658] Type checker rejects
+   * CAST(ARRAY() AS ROW(x INT) ARRAY)</a>.
+   *
+   * <p>The Spark {@code ARRAY()} function creates an empty array whose
+   * element type is UNKNOWN; such an array can be cast to any array type. */
+  @Test void testCastEmptyArray() {
+    final SqlOperatorFixture f = fixture().withLibrary(SqlLibrary.SPARK);
+    f.checkScalar("cast(array() as integer array)", "[]",
+        "INTEGER NOT NULL ARRAY NOT NULL");
+    f.checkScalar("cast(array() as row(x int) array)", "[]",
+        "RecordType(INTEGER NOT NULL X) NOT NULL ARRAY NOT NULL");
+    f.checkScalar("cast(array() as integer array array)", "[]",
+        "INTEGER ARRAY NOT NULL ARRAY NOT NULL");
+    f.checkScalar("cast(array() as map<varchar, integer> array)", "[]",
+        "(VARCHAR NOT NULL, INTEGER) MAP NOT NULL ARRAY NOT NULL");
+    // A non-empty array with UNKNOWN or NULL element type contains only nulls
+    f.checkScalar("cast(array_append(array(), null) as row(x int) array)",
+        "[null]",
+        "RecordType(INTEGER NOT NULL X) ARRAY NOT NULL");
+    f.checkScalar("cast(array(null) as row(x int) array)",
+        "[null]",
+        "RecordType(INTEGER NOT NULL X) ARRAY NOT NULL");
+    // The empty MAP() has UNKNOWN key and value types
+    f.checkScalar("cast(map() as map<varchar, integer>)", "{}",
+        "(VARCHAR NOT NULL, INTEGER NOT NULL) MAP NOT NULL");
+    f.checkScalar("cast(map() as map<varchar, row(x int)>)", "{}",
+        "(VARCHAR NOT NULL, RecordType(INTEGER X) NOT NULL) MAP NOT NULL");
+    f.checkScalar("cast(map() as map<varchar, integer array>)", "{}",
+        "(VARCHAR NOT NULL, INTEGER ARRAY NOT NULL) MAP NOT NULL");
   }
 
   /** Test cases for
@@ -2446,40 +2685,6 @@ public class SqlOperatorTest {
     final SqlOperatorFixture f = fixture();
     f.check("select * from (values(1))", SqlTests.INTEGER_TYPE_CHECKER, 1);
 
-    // Check return type on scalar sub-query in select list.  Note return
-    // type is always nullable even if sub-query select value is NOT NULL.
-    // Bug FRG-189 causes this test to fail only in SqlOperatorTest; not
-    // in subtypes.
-    if (Bug.FRG189_FIXED) {
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(1)))\n"
-              + "FROM (VALUES(2))",
-          "RecordType(INTEGER NOT NULL EXPR$0, INTEGER EXPR$1) NOT NULL");
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(CAST(10 as BIGINT))))\n"
-              + "FROM (VALUES(CAST(10 as bigint)))",
-          "RecordType(BIGINT NOT NULL EXPR$0, BIGINT EXPR$1) NOT NULL");
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(10.5)))\n"
-              + "FROM (VALUES(10.5))",
-          "RecordType(DECIMAL(3, 1) NOT NULL EXPR$0, DECIMAL(3, 1) EXPR$1) NOT NULL");
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES('this is a char')))\n"
-              + "FROM (VALUES('this is a char too'))",
-          "RecordType(CHAR(18) NOT NULL EXPR$0, CHAR(14) EXPR$1) NOT NULL");
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(true)))\n"
-              + "FROM (values(false))",
-          "RecordType(BOOLEAN NOT NULL EXPR$0, BOOLEAN EXPR$1) NOT NULL");
-      f.checkType(" SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(cast('abcd' as varchar(10)))))\n"
-              + "FROM (VALUES(CAST('abcd' as varchar(10))))",
-          "RecordType(VARCHAR(10) NOT NULL EXPR$0, VARCHAR(10) EXPR$1) NOT NULL");
-      f.checkType("SELECT *,\n"
-              + "  (SELECT * FROM (VALUES(TIMESTAMP '2006-01-01 12:00:05')))\n"
-              + "FROM (VALUES(TIMESTAMP '2006-01-01 12:00:05'))",
-          "RecordType(TIMESTAMP(0) NOT NULL EXPR$0, TIMESTAMP(0) EXPR$1) NOT NULL");
-    }
   }
 
   @Test void testLiteralChain() {
@@ -2608,6 +2813,14 @@ public class SqlOperatorTest {
     f.checkString("concat('', '', 'a')", "a", "VARCHAR(1) NOT NULL");
     f.checkString("concat('', '', '')", "", "VARCHAR(0) NOT NULL");
     f.checkFails("^concat()^", INVALID_ARGUMENTS_NUMBER, false);
+    // Test case for [CALCITE-7063]
+    // Result type inferred for CONCAT_FUNCTION is incorrect for BINARY arguments
+    f.checkString("concat(x'0a', x'0b', x'0c')", "0a0b0c", "VARBINARY(3) NOT NULL");
+    f.checkString("concat(cast(x'0a' as varbinary), x'0b')", "0a0b",
+        "VARBINARY NOT NULL");
+    f.checkNull("concat(x'0a', cast(null as varbinary))");
+    f.checkFails("^concat('a', x'0a')^", "Parameters must be of the same type",
+        false);
   }
 
   /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-6518">
@@ -2634,6 +2847,14 @@ public class SqlOperatorTest {
     f.checkString("concat(null, null, null)", "", "VARCHAR NOT NULL");
     f.checkString("concat('', null, '')", "", "VARCHAR NOT NULL");
     f.checkFails("^concat()^", INVALID_ARGUMENTS_NUMBER, false);
+    // Test case for [CALCITE-7063]
+    // Result type inferred for CONCAT_FUNCTION is incorrect for BINARY arguments
+    // MSSQL and PostgreSQL CONCAT convert every argument to a character
+    // string, so binary arguments are implicitly cast to character
+    f.checkString("concat(x'0a', x'0b', x'0c')", "0a0b0c", "VARCHAR NOT NULL");
+    f.checkString("concat(x'0a', cast(null as varbinary), x'0c')", "0a0c",
+        "VARCHAR NOT NULL");
+    f.checkString("concat('a', x'0a')", "a0a", "VARCHAR NOT NULL");
   }
 
   private static void checkConcat2Func(SqlOperatorFixture f) {
@@ -2655,6 +2876,18 @@ public class SqlOperatorTest {
     f.checkNull("concat(null, null)");
     f.checkFails("^concat('a', 'b', 'c')^", INVALID_ARGUMENTS_NUMBER, false);
     f.checkFails("^concat('a')^", INVALID_ARGUMENTS_NUMBER, false);
+    // Test case for [CALCITE-7063]
+    // Result type inferred for CONCAT_FUNCTION is incorrect for BINARY arguments
+    f.checkString("concat(x'0a', x'0b')", "0a0b", "VARBINARY(2) NOT NULL");
+    f.checkString("concat(x'0a', cast(null as varbinary))", "0a",
+        "VARBINARY NOT NULL");
+    f.checkNull("concat(cast(null as varbinary), cast(null as varbinary))");
+    f.checkFails("^concat('a', x'0a')^",
+        "Cannot apply 'CONCAT' to arguments of type "
+            + "'CONCAT\\(<CHAR\\(1\\)>, <BINARY\\(1\\)>\\)'\\. Supported "
+            + "form\\(s\\): 'CONCAT\\(<CHARACTER>, <CHARACTER>\\)'\n"
+            + "'CONCAT\\(<BINARY>, <BINARY>\\)'",
+        false);
   }
 
   /** Test case for
@@ -2706,7 +2939,7 @@ public class SqlOperatorTest {
     f.checkString("concat_ws(',', 'a', array['b', 'c'], DATE '1945-02-24')",
         "a,[b, c],1945-02-24", "VARCHAR NOT NULL");
     f.checkString("concat_ws(',', timestamp '2024-07-06 12:15:48.678')",
-        "2024-07-06 12:15:48", "VARCHAR NOT NULL");
+        "2024-07-06 12:15:48.678", "VARCHAR NOT NULL");
     f.checkString("concat_ws(',', time '12:34:56', time '13:00:00', 2, 'abc')",
         "12:34:56,13:00:00,2,abc", "VARCHAR NOT NULL");
     f.checkString("concat_ws(',', null, null)", "", "VARCHAR NOT NULL");
@@ -3321,26 +3554,26 @@ public class SqlOperatorTest {
     final SqlOperatorFixture f = fixture();
     f.checkFails("^(DATE '2020-10-10', DATE '2021-10-10') CONTAINS TIME '10:00:00'^",
         "Cannot apply 'CONTAINS' to arguments of type "
-            + "'<RECORDTYPE\\(DATE EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIME\\(0\\)>'\\. "
+            + "'<ROW\\(DATE EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIME\\(0\\)>'\\. "
             + containsError, false);
     f.checkFails("^(DATE '2020-10-10', DATE '2021-10-10') CONTAINS "
             + "TIMESTAMP '2010-01-01 10:00:00'^",
         "Cannot apply 'CONTAINS' to arguments of type "
-            + "'<RECORDTYPE\\(DATE EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIMESTAMP\\(0\\)>'\\. "
+            + "'<ROW\\(DATE EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIMESTAMP\\(0\\)>'\\. "
             + containsError, false);
     f.checkFails("^(DATE '2020-10-10', TIMESTAMP '2021-10-10 00:00:00') "
             + "CONTAINS TIMESTAMP '2010-01-01 10:00:00'^",
         "Cannot apply 'CONTAINS' to arguments of type "
-            + "'<RECORDTYPE\\(DATE EXPR\\$0, TIMESTAMP\\(0\\) EXPR\\$1\\)> "
+            + "'<ROW\\(DATE EXPR\\$0, TIMESTAMP\\(0\\) EXPR\\$1\\)> "
             + "CONTAINS <TIMESTAMP\\(0\\)>'\\. "
             + containsError, false);
     f.checkFails("^(TIME '10:10:10', DATE '2021-10-10') CONTAINS TIME '10:00:00'^",
         "Cannot apply 'CONTAINS' to arguments of type "
-            + "'<RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIME\\(0\\)>'\\. "
+            + "'<ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> CONTAINS <TIME\\(0\\)>'\\. "
             + containsError, false);
     f.checkFails("^(TIME '10:10:10', DATE '2021-10-10') CONTAINS TIMESTAMP '2010-02-02 10:00:00'^",
         "Cannot apply 'CONTAINS' to arguments of type "
-            + "'<RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
+            + "'<ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
             + "CONTAINS <TIMESTAMP\\(0\\)>'\\. "
             + containsError, false);
     final String overlapsError = "Supported form\\(s\\): "
@@ -3352,21 +3585,21 @@ public class SqlOperatorTest {
     f.checkFails("^(TIME '10:10:10', DATE '2021-10-10') OVERLAPS "
             + "(TIMESTAMP '2010-02-02 10:00:00', TIME '10:00:00')^",
         "Cannot apply 'OVERLAPS' to arguments of type "
-            + "'<RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
-            + "OVERLAPS <RECORDTYPE\\(TIMESTAMP\\(0\\) EXPR\\$0, TIME\\(0\\) EXPR\\$1\\)>'\\. "
+            + "'<ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
+            + "OVERLAPS <ROW\\(TIMESTAMP\\(0\\) EXPR\\$0, TIME\\(0\\) EXPR\\$1\\)>'\\. "
             + overlapsError, false);
     f.checkFails("^(TIME '10:10:10', DATE '2021-10-10') "
             + "OVERLAPS (TIME '10:00:00', DATE '2020-01-01')^",
         "Cannot apply 'OVERLAPS' to arguments of type "
-            + "'<RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
-            + "OVERLAPS <RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)>'\\. "
+            + "'<ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
+            + "OVERLAPS <ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)>'\\. "
             + overlapsError, false);
     final String precedesError = overlapsError.replace("OVERLAPS", "PRECEDES");
     f.checkFails("^(TIME '10:10:10', DATE '2021-10-10') "
             + "PRECEDES (TIME '10:00:00', TIME '10:10:10')^",
         "Cannot apply 'PRECEDES' to arguments of type "
-            + "'<RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
-            + "PRECEDES <RECORDTYPE\\(TIME\\(0\\) EXPR\\$0, TIME\\(0\\) EXPR\\$1\\)>'\\. "
+            + "'<ROW\\(TIME\\(0\\) EXPR\\$0, DATE EXPR\\$1\\)> "
+            + "PRECEDES <ROW\\(TIME\\(0\\) EXPR\\$0, TIME\\(0\\) EXPR\\$1\\)>'\\. "
             + precedesError, false);
   }
 
@@ -3620,12 +3853,10 @@ public class SqlOperatorTest {
             + "  time '01:23:44') hour to second / 2",
         "08:25:52", "TIME(0) NOT NULL");
 
-    if (Bug.DT1684_FIXED) {
-      f.checkBoolean("(date '1969-04-29' +"
-              + " (CURRENT_DATE - "
-              + "  date '1969-04-29') day / 2) is not null",
-          true);
-    }
+    f.checkBoolean("(date '1969-04-29' +"
+            + " (CURRENT_DATE - "
+            + "  date '1969-04-29') day / 2) is not null",
+        true);
     f.checkScalar("(date '2023-12-01' - date '2022-12-01') year",
         "+1", "INTERVAL YEAR NOT NULL");
     f.checkScalar("(date '2022-12-01' - date '2023-12-01') year",
@@ -5204,6 +5435,16 @@ public class SqlOperatorTest {
           "VARCHAR");
       f.checkNull("parse_url('http://calcite.apache.org/path1/p.php?k1=v1&k2=v2#Ref1',"
           + " 'QUERY', 'k3')");
+      // key is matched literally, regex metacharacters do not match other keys
+      f.checkNull("parse_url('http://calcite.apache.org/path1/p.php?k1=v1&k2=v2#Ref1',"
+          + " 'QUERY', 'k.')");
+      f.checkString("parse_url('http://calcite.apache.org/path1/p.php?a.b=v1&axb=v2#Ref1',"
+              + " 'QUERY', 'a.b')",
+          "v1",
+          "VARCHAR");
+      // a key that is not a valid regex must not raise an error
+      f.checkNull("parse_url('http://calcite.apache.org/path1/p.php?k1=v1&k2=v2#Ref1',"
+          + " 'QUERY', '(')");
       f.checkString("parse_url('http://calcite.apache.org/path1/p.php?k1=v1&k2=v2#Ref1',"
               + " 'FILE')",
           "/path1/p.php?k1=v1&k2=v2",
@@ -5803,22 +6044,22 @@ public class SqlOperatorTest {
         .setFor(SqlLibraryOperators.TO_TIMESTAMP_PG);
 
     f.checkString("to_timestamp('2022-06-03 18:34:56', 'YYYY-MM-DD HH24:MI:SS')",
-        "2022-06-03 18:34:56",
+        "2022-06-03 18:34:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkString("to_timestamp('0001-01-01 18:43:56', 'YYYY-MM-DD HH24:MI:SS')",
-        "0001-01-01 18:43:56",
+        "0001-01-01 18:43:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkString("to_timestamp('18:34:56 Jun 03, 2022', 'HH24:MI:SS Mon DD, YYYY')",
-        "2022-06-03 18:34:56",
+        "2022-06-03 18:34:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkString("to_timestamp('18:34:56 2022-June-03', 'HH24:MI:SS YYYY-Month-DD')",
-        "2022-06-03 18:34:56",
+        "2022-06-03 18:34:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkString("to_timestamp('18:34:56 2022-Jun-03', 'HH24:MI:SS YYYY-Mon-DD')",
-        "2022-06-03 18:34:56",
+        "2022-06-03 18:34:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkString("to_timestamp('18:34:56 2022-154', 'HH24:MI:SS YYYY-DDD')",
-        "2022-06-03 18:34:56",
+        "2022-06-03 18:34:56 UTC",
         "TIMESTAMP_TZ(0) NOT NULL");
     f.checkFails("to_timestamp('ABCD', 'YYYY-MM-DD HH24:MI:SS')",
         "java.sql.SQLException: Invalid format: 'YYYY-MM-DD HH24:MI:SS' for timestamp "
@@ -8219,7 +8460,7 @@ public class SqlOperatorTest {
     f.checkScalar("array_append(array(null), null)", "[null, null]",
         "NULL ARRAY NOT NULL");
     f.checkScalar("array_append(array(), null)", "[null]",
-        "UNKNOWN ARRAY NOT NULL");
+        "NULL ARRAY NOT NULL");
     f.checkScalar("array_append(array(), 1)", "[1]",
         "INTEGER NOT NULL ARRAY NOT NULL");
     f.checkScalar("array_append(array[array[1, 2]], array[3, 4])", "[[1, 2], [3, 4]]",
@@ -8230,6 +8471,26 @@ public class SqlOperatorTest {
     f.checkType("array_append(cast(null as integer array), 1)", "INTEGER ARRAY");
     f.checkFails("^array_append(array[1, 2], true)^",
         "INTEGER is not comparable to BOOLEAN", false);
+
+    // Test cases for [CALCITE-7699]
+    // ARRAY_INSERT fails in validation when first argument is not an array
+    // constructor
+    f.checkScalar("array_append(cast(array[1, 2, 3] as integer array), "
+            + "cast(4 as double))",
+        "[1.0, 2.0, 3.0, 4.0]", "DOUBLE NOT NULL ARRAY NOT NULL");
+    f.checkScalar("array_append(array_distinct(array[1, 2, 3]), "
+            + "cast(4 as double))",
+        "[1.0, 2.0, 3.0, 4.0]", "DOUBLE NOT NULL ARRAY NOT NULL");
+    // Array of arrays as a non-constructor operand
+    f.checkScalar("array_append("
+            + "cast(array[array[1, 2]] as integer array array), "
+            + "array[cast(3 as double)])",
+        "[[1.0, 2.0], [3.0]]",
+        "DOUBLE NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
+    // Test case for [CALCITE-7704]
+    // ARRAY_INSERT crashes in code generation with array-of-arrays argument
+    f.checkScalar("array_append(array[array[cast(1 as double)]], array[2])",
+        "[[1.0], [2.0]]", "DOUBLE NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
 
     // element cast to the biggest type
     f.checkScalar("array_append(array(cast(1 as tinyint)), 2)", "[1, 2]",
@@ -8421,7 +8682,9 @@ public class SqlOperatorTest {
     f0.forEachLibrary(libraries, consumer);
   }
 
-  /** Tests {@code ARRAY_MAX} function from Spark, Hive. */
+  /** Tests {@code ARRAY_MAX} function from Spark, Hive, including
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7837">[CALCITE-7837]
+   * ARRAY_MIN, ARRAY_MAX and SORT_ARRAY throw ClassCastException for ROW elements</a>. */
   @Test void testArrayMaxFunc() {
     final SqlOperatorFixture f0 = fixture().setFor(SqlLibraryOperators.ARRAY_MAX);
     f0.checkFails("^array_max(array[1, 2])^",
@@ -8432,6 +8695,18 @@ public class SqlOperatorTest {
       f.checkScalar("array_max(array[1, 2])", "2", "INTEGER");
       f.checkScalar("array_max(array[1, 2, null])", "2", "INTEGER");
       f.checkScalar("array_max(array[1])", "1", "INTEGER");
+      f.checkScalar("array_max(array[row(1, 'Foo'), row(2, 'Bar')])", "{2, Bar}",
+          "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1)");
+      f.checkScalar("array_max(array[row(1, 'Bar'), row(1, 'Foo'), null])", "{1, Foo}",
+          "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1)");
+      f.checkScalar("array_max(array[row(1, row(2, 'Bar')), row(1, row(2, 'Foo'))])",
+          "{1, {2, Foo}}",
+          "RecordType(INTEGER EXPR$0, RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1) EXPR$1)");
+      f.checkScalar("array_max(array[row(1, 2), row(1, null)])", "{1, null}",
+          "RecordType(INTEGER EXPR$0, INTEGER EXPR$1)");
+      f.checkScalar("array_max(array[row(1, 2)])", "{1, 2}",
+          "RecordType(INTEGER EXPR$0, INTEGER EXPR$1)");
+      f.checkNull("array_max(array[cast(null as row(x integer, y integer))])");
       f.checkType("array_max(array())", "UNKNOWN");
       f.checkNull("array_max(array())");
       f.checkNull("array_max(cast(null as integer array))");
@@ -8446,7 +8721,9 @@ public class SqlOperatorTest {
     f0.forEachLibrary(libraries, consumer);
   }
 
-  /** Tests {@code ARRAY_MIN} function from Spark, Hive. */
+  /** Tests {@code ARRAY_MIN} function from Spark, Hive, including
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7837">[CALCITE-7837]
+   * ARRAY_MIN, ARRAY_MAX and SORT_ARRAY throw ClassCastException for ROW elements</a>. */
   @Test void testArrayMinFunc() {
     final SqlOperatorFixture f0 = fixture().setFor(SqlLibraryOperators.ARRAY_MIN);
     f0.checkFails("^array_min(array[1, 2])^",
@@ -8455,6 +8732,18 @@ public class SqlOperatorTest {
         ImmutableList.of(SqlLibrary.HIVE, SqlLibrary.SPARK);
     final Consumer<SqlOperatorFixture> consumer = f -> {
       f.checkScalar("array_min(array[1, 2])", "1", "INTEGER");
+      f.checkScalar("array_min(array[row(2, 'Bar'), row(1, 'Foo')])", "{1, Foo}",
+          "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1)");
+      f.checkScalar("array_min(array[null, row(1, 'Foo'), row(1, 'Bar')])", "{1, Bar}",
+          "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1)");
+      f.checkScalar("array_min(array[row(1, row(2, 'Foo')), row(1, row(2, 'Bar'))])",
+          "{1, {2, Bar}}",
+          "RecordType(INTEGER EXPR$0, RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1) EXPR$1)");
+      f.checkScalar("array_min(array[row(1, null), row(1, 2)])", "{1, 2}",
+          "RecordType(INTEGER EXPR$0, INTEGER EXPR$1)");
+      f.checkScalar("array_min(array[row(1, 2)])", "{1, 2}",
+          "RecordType(INTEGER EXPR$0, INTEGER EXPR$1)");
+      f.checkNull("array_min(array[cast(null as row(x integer, y integer))])");
       f.checkScalar("array_min(array[1, 2, null])", "1", "INTEGER");
       f.checkType("array_min(array())", "UNKNOWN");
       f.checkNull("array_min(array())");
@@ -8558,7 +8847,7 @@ public class SqlOperatorTest {
     f.checkScalar("array_prepend(array(null), null)", "[null, null]",
         "NULL ARRAY NOT NULL");
     f.checkScalar("array_prepend(array(), null)", "[null]",
-        "UNKNOWN ARRAY NOT NULL");
+        "NULL ARRAY NOT NULL");
     f.checkScalar("array_prepend(array(), 1)", "[1]",
         "INTEGER NOT NULL ARRAY NOT NULL");
     f.checkScalar("array_prepend(array[array[1, 2]], array[3, 4])", "[[3, 4], [1, 2]]",
@@ -8569,6 +8858,20 @@ public class SqlOperatorTest {
     f.checkType("array_prepend(cast(null as integer array), 1)", "INTEGER ARRAY");
     f.checkFails("^array_prepend(array[1, 2], true)^",
         "INTEGER is not comparable to BOOLEAN", false);
+
+    // Test case for [CALCITE-7699]
+    // ARRAY_INSERT fails in validation when first argument is not an array
+    // constructor
+    f.checkScalar("array_prepend(cast(array[1, 2, 3] as integer array), "
+            + "cast(4 as double))",
+        "[4.0, 1.0, 2.0, 3.0]", "DOUBLE NOT NULL ARRAY NOT NULL");
+    f.checkScalar("array_prepend(array_distinct(array[1, 2, 3]), "
+            + "cast(4 as double))",
+        "[4.0, 1.0, 2.0, 3.0]", "DOUBLE NOT NULL ARRAY NOT NULL");
+    // Test case for [CALCITE-7704]
+    // ARRAY_INSERT crashes in code generation with array-of-arrays argument
+    f.checkScalar("array_prepend(array[array[cast(1 as double)]], array[2])",
+        "[[2.0], [1.0]]", "DOUBLE NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
 
     // element cast to the biggest type
     f.checkScalar("array_prepend(array(1), cast(3 as float))", "[3.0, 1.0]",
@@ -8903,6 +9206,36 @@ public class SqlOperatorTest {
             + "An index shall be either < 0 or > 0 \\(the first element has index 1\\) "
             + "and not exceeds the allowed limit.", true);
 
+    // Test case for [CALCITE-7699]
+    // ARRAY_INSERT fails in validation when first argument is not an array
+    // constructor
+    f1.checkScalar("array_insert(cast(array[1, 2, 3] as integer array), 3, "
+            + "cast(4 as double))",
+        "[1.0, 2.0, 4.0, 3.0]", "DOUBLE ARRAY NOT NULL");
+    f1.checkScalar("array_insert(array_distinct(array[1, 2, 3]), 3, "
+            + "cast(4 as double))",
+        "[1.0, 2.0, 4.0, 3.0]", "DOUBLE ARRAY NOT NULL");
+    f1.checkScalar("array_insert(cast(array[1, 2] as integer array), 2, 2.5)",
+        "[1.0, 2.5, 2.0]", "DECIMAL(11, 1) ARRAY NOT NULL");
+    f1.checkNull("array_insert(cast(null as integer array), 3, "
+        + "cast(4 as double))");
+    f1.checkType("array_insert(cast(null as integer array), 3, "
+        + "cast(4 as double))", "DOUBLE ARRAY");
+    // Array of arrays as a non-constructor operand
+    f1.checkScalar("array_insert("
+            + "cast(array[array[1, 2]] as integer array array), 1, array[3])",
+        "[[3], [1, 2]]", "INTEGER NOT NULL ARRAY ARRAY NOT NULL");
+    f1.checkScalar("array_insert("
+            + "cast(array[array[1, 2]] as integer array array), 1, "
+            + "array[cast(3 as double)])",
+        "[[3.0], [1.0, 2.0]]", "DOUBLE NOT NULL ARRAY ARRAY NOT NULL");
+    // Test case for [CALCITE-7704]
+    // ARRAY_INSERT crashes in code generation with array-of-arrays argument
+    f1.checkScalar("array_insert(array[array[cast(1 as double)]], 1, array[2])",
+        "[[2.0], [1.0]]", "DOUBLE NOT NULL ARRAY ARRAY NOT NULL");
+    f1.checkScalar("array_insert(array[array[1]], 1, array[2.5])",
+        "[[2.5], [1.0]]", "DECIMAL(11, 1) NOT NULL ARRAY ARRAY NOT NULL");
+
     f1.checkScalar("array_insert(array[1, 2, 3], 3, 4)",
         "[1, 2, 4, 3]", "INTEGER ARRAY NOT NULL");
     f1.checkScalar("array_insert(array[1, 2, 3], 3, cast(null as integer))",
@@ -8994,6 +9327,8 @@ public class SqlOperatorTest {
       f.checkNull("array_union(cast(null as integer array), array[1])");
       f.checkNull("array_union(array[1], cast(null as integer array))");
       f.checkNull("array_union(cast(null as integer array), cast(null as integer array))");
+      f.checkScalarExact(
+          "cardinality(array_union(array[array[1.0]], array[array[1.00]]))", 1);
     };
     f0.forEachLibrary(libraries, consumer);
   }
@@ -9108,6 +9443,31 @@ public class SqlOperatorTest {
     f.checkScalar("sort_array(array())", "[]",
         "UNKNOWN NOT NULL ARRAY NOT NULL");
     f.checkNull("sort_array(null)");
+    f.checkScalar("sort_array(array[row(2, 'Bar'), row(1, 'Foo')])",
+        "[{1, Foo}, {2, Bar}]",
+        "RecordType(INTEGER NOT NULL EXPR$0, CHAR(3) NOT NULL EXPR$1) NOT NULL ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, 'Foo'), null, row(1, 'Bar')])",
+        "[null, {1, Bar}, {1, Foo}]",
+        "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1) ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, 'Bar'), null, row(1, 'Foo')], false)",
+        "[{1, Foo}, {1, Bar}, null]",
+        "RecordType(INTEGER EXPR$0, CHAR(3) EXPR$1) ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, row(2, 'Foo')), row(1, row(2, 'Bar'))])",
+        "[{1, {2, Bar}}, {1, {2, Foo}}]",
+        "RecordType(INTEGER NOT NULL EXPR$0, "
+            + "RecordType(INTEGER NOT NULL EXPR$0, CHAR(3) NOT NULL EXPR$1) NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, row(2, 'Bar')), row(1, row(2, 'Foo'))], false)",
+        "[{1, {2, Foo}}, {1, {2, Bar}}]",
+        "RecordType(INTEGER NOT NULL EXPR$0, "
+            + "RecordType(INTEGER NOT NULL EXPR$0, CHAR(3) NOT NULL EXPR$1) NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, null), row(1, 2)])",
+        "[{1, 2}, {1, null}]",
+        "RecordType(INTEGER NOT NULL EXPR$0, INTEGER EXPR$1) NOT NULL ARRAY NOT NULL");
+    f.checkScalar("sort_array(array[row(1, 2), row(1, null)], false)",
+        "[{1, null}, {1, 2}]",
+        "RecordType(INTEGER NOT NULL EXPR$0, INTEGER EXPR$1) NOT NULL ARRAY NOT NULL");
 
     // elements cast
     f.checkScalar("sort_array(array[cast(1 as tinyint), 2])", "[1, 2]",
@@ -9192,12 +9552,34 @@ public class SqlOperatorTest {
     f.checkScalar("\"EXISTS\"(array[array[1, 2], array[3, 4]], x -> x[1] = 1)", true, "BOOLEAN");
     f.checkScalar("\"EXISTS\"(array[array[1, 2], array[3, 4]], x -> x[1] = 5)", false, "BOOLEAN");
 
+    // array of structs; test case for
+    // [CALCITE-7269] SqlValidator throws exception if lambda parameter is struct
+    f.checkScalar("\"EXISTS\"(array(ROW(1, 2)), x -> x.\"EXPR$1\" > 1)", true, "BOOLEAN");
+    f.checkScalar("\"EXISTS\"(array(ROW(1, 2)), x -> x.\"EXPR$1\" > 2)", false, "BOOLEAN");
+
     // test for null
     f.checkScalar("\"EXISTS\"(array[null, 3], x -> x > 2 or x < 4)", true, "BOOLEAN");
     f.checkScalar("\"EXISTS\"(array[null, 3], x -> x is null)", true, "BOOLEAN");
     f.checkNull("\"EXISTS\"(array[null, 3], x -> cast(null as boolean))");
     f.checkNull("\"EXISTS\"(array[null, 3], x -> x = null)");
     f.checkNull("\"EXISTS\"(cast(null as integer array), x -> x > 2)");
+    f.checkNull("\"EXISTS\"(null, x -> x > 2)");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7671">[CALCITE-7671]
+   * EXISTS fails typechecking nested lambda
+   * EXIST(a -&gt; EXISTS(a, b -&gt; b &gt; 2))</a>. */
+  @Test void testNestedExistsFunc() {
+    final SqlOperatorFixture f = fixture()
+        .setFor(SqlLibraryOperators.EXISTS)
+        .withLibrary(SqlLibrary.SPARK);
+    f.checkScalar("\"EXISTS\"(array[array[1, 2], array[3, 4]],"
+            + " a -> \"EXISTS\"(a, b -> b > 3))", true, "BOOLEAN");
+    f.checkScalar("\"EXISTS\"(array[array[1, 2], array[3, 4]],"
+            + " a -> \"EXISTS\"(a, b -> b > 4))", false, "BOOLEAN");
+    f.checkNull("\"EXISTS\"(cast(null as integer array array),"
+        + " a -> \"EXISTS\"(a, b -> b > 3))");
   }
 
   /** Tests {@code MAP_CONCAT} function from Spark. */
@@ -9220,7 +9602,9 @@ public class SqlOperatorTest {
         "(INTEGER NOT NULL, INTEGER) MAP NOT NULL");
     // test zero arg, but it should return empty map.
     f.checkScalar("map_concat()", "{}",
-        "(VARCHAR NOT NULL, VARCHAR NOT NULL) MAP");
+        "(ANY NOT NULL, ANY NOT NULL) MAP");
+    f.checkScalar("map_concat(map_concat(), map[1, 2])", "{1=2}",
+        "(INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL");
 
     // after calcite supports cast(null as map<string, int>), it should add these tests.
     if (TODO) {
@@ -9234,16 +9618,18 @@ public class SqlOperatorTest {
 
     // test only has one operand, but it is not map type.
     f.checkFails("^map_concat(1)^",
-        "Function 'MAP_CONCAT' should all be of type map, but it is 'INTEGER NOT NULL'", false);
-    f.checkFails("^map_concat(null)^",
-        "Function 'MAP_CONCAT' should all be of type map, but it is 'NULL'", false);
+        "Arguments of function 'MAP_CONCAT' should all be of type MAP, "
+            + "but 'INTEGER NOT NULL' was found", false);
+    // test operand is the NULL literal.
+    f.checkNull("map_concat(null)");
     // test operands in same type family, but it is not map type.
     f.checkFails("^map_concat(array[1], array[1])^",
-        "Function 'MAP_CONCAT' should all be of type map, "
-            + "but it is 'INTEGER NOT NULL ARRAY NOT NULL'", false);
-    f.checkFails("^map_concat(map['foo', 1], null)^",
-        "Function 'MAP_CONCAT' should all be of type map, "
-            + "but it is 'NULL'", false);
+        "Arguments of function 'MAP_CONCAT' should all be of type MAP, "
+            + "but 'INTEGER NOT NULL ARRAY NOT NULL' was found", false);
+    // test map operand with NULL literal.
+    f.checkNull("map_concat(map['foo', 1], null)");
+    f.checkType("map_concat(map['foo', 1], null)", "NULL");
+    f.checkNull("map_concat(null, map['foo', 1])");
     // test operands not in same type family.
     f.checkFails("^map_concat(map[1, null], array[1])^",
         "Parameters must be of the same type", false);
@@ -9262,6 +9648,9 @@ public class SqlOperatorTest {
         "(INTEGER NOT NULL, INTEGER) MAP NOT NULL");
     f1.checkScalar("map_concat(map('foo', 1), map())", "{foo=1}",
         "(CHAR(3) NOT NULL, INTEGER NOT NULL) MAP NOT NULL");
+    // test zero arg, but it should return empty map.
+    f1.checkScalar("map_concat()", "{}",
+        "(ANY NOT NULL, ANY NOT NULL) MAP");
 
     // test operand is null map
     f1.checkNull("map_concat(map('foo', 1), cast(null as map<varchar, int>))");
@@ -9271,9 +9660,9 @@ public class SqlOperatorTest {
     f1.checkType("map_concat(cast(null as map<varchar, int>), map['foo', 1])",
         "(VARCHAR NOT NULL, INTEGER) MAP");
 
-    f1.checkFails("^map_concat(map('foo', 1), null)^",
-        "Function 'MAP_CONCAT' should all be of type map, "
-            + "but it is 'NULL'", false);
+    f1.checkNull("map_concat(map('foo', 1), null)");
+    f1.checkType("map_concat(map('foo', 1), null)", "NULL");
+    f1.checkNull("map_concat(null, map('foo', 1))");
     // test operands not in same type family.
     f1.checkFails("^map_concat(map(1, null), array[1])^",
         "Parameters must be of the same type", false);
@@ -9553,12 +9942,12 @@ public class SqlOperatorTest {
     f.checkFails("^map_from_entries(array[1])^",
         "Cannot apply 'MAP_FROM_ENTRIES' to arguments of type 'MAP_FROM_ENTRIES\\("
             + "<INTEGER ARRAY>\\)'. Supported form\\(s\\): 'MAP_FROM_ENTRIES\\("
-            + "<ARRAY<RECORDTYPE\\(TWO FIELDS\\)>>\\)'",
+            + "<ARRAY<ROW\\(TWO FIELDS\\)>>\\)'",
         false);
     f.checkFails("^map_from_entries(array[row(1, 'a', 2)])^",
         "Cannot apply 'MAP_FROM_ENTRIES' to arguments of type 'MAP_FROM_ENTRIES\\("
-            + "<RECORDTYPE\\(INTEGER EXPR\\$0, CHAR\\(1\\) EXPR\\$1, INTEGER EXPR\\$2\\) ARRAY>\\)'. "
-            + "Supported form\\(s\\): 'MAP_FROM_ENTRIES\\(<ARRAY<RECORDTYPE\\(TWO FIELDS\\)>>\\)'",
+            + "<ROW\\(INTEGER EXPR\\$0, CHAR\\(1\\) EXPR\\$1, INTEGER EXPR\\$2\\) ARRAY>\\)'. "
+            + "Supported form\\(s\\): 'MAP_FROM_ENTRIES\\(<ARRAY<ROW\\(TWO FIELDS\\)>>\\)'",
         false);
   }
 
@@ -9611,6 +10000,8 @@ public class SqlOperatorTest {
             + "<CHARACTER>, <CHARACTER>\\)", false);
 
     final SqlOperatorFixture f = f0.withLibrary(SqlLibrary.SPARK);
+    // Expected string and NULL results below were verified against
+    // MySQL Community Server 8.4.13 (official mysql:8.4 Docker image).
     f.checkString("substring_index('www.apache.org', '.', 2)",
         "www.apache", "VARCHAR(14) NOT NULL");
     f.checkString("substring_index('www.apache.org', '.', 1)",
@@ -9619,6 +10010,16 @@ public class SqlOperatorTest {
         "www.apache.org", "VARCHAR(14) NOT NULL");
     f.checkString("substring_index('www.apache.org', '.', -1)",
         "org", "VARCHAR(14) NOT NULL");
+    f.checkString("substring_index('www.apache.org', '.', -2)",
+        "apache.org", "VARCHAR(14) NOT NULL");
+    f.checkString("substring_index('www.apache.org', '.', -3)",
+        "www.apache.org", "VARCHAR(14) NOT NULL");
+    f.checkString("substring_index('www.apache.org', '.', -10)",
+        "www.apache.org", "VARCHAR(14) NOT NULL");
+    f.checkString("substring_index('a.b.c', '.', -2)",
+        "b.c", "VARCHAR(5) NOT NULL");
+    f.checkString("substring_index('a--b--c', '--', -2)",
+        "b--c", "VARCHAR(7) NOT NULL");
 
     f.checkString("substring_index('aBc', 'B', -1)",
         "c", "VARCHAR(3) NOT NULL");
@@ -11673,7 +12074,8 @@ public class SqlOperatorTest {
       f.checkFails("^" + fn + "('aabbcc', x'aa')^",
           "Cannot apply '" + fn + "' to arguments of type "
               + "'" + fn + "\\(<CHAR\\(6\\)>, <BINARY\\(1\\)>\\)'\\. Supported "
-              + "form\\(s\\): '" + fn + "\\(<STRING>, <STRING>\\)'",
+              + "form\\(s\\): '" + fn + "\\(<CHARACTER>, <CHARACTER>\\)'\\n"
+              + "'" + fn + "\\(<BINARY>, <BINARY>\\)'",
           false);
       f.checkNull(fn + "(null, null)");
       f.checkNull(fn + "('12345', null)");
@@ -11713,7 +12115,8 @@ public class SqlOperatorTest {
       f.checkFails("^" + fn + "('aabbcc', x'aa')^",
           "Cannot apply '" + fn + "' to arguments of type "
               + "'" + fn + "\\(<CHAR\\(6\\)>, <BINARY\\(1\\)>\\)'\\. Supported "
-              + "form\\(s\\): '" + fn + "\\(<STRING>, <STRING>\\)'",
+              + "form\\(s\\): '" + fn + "\\(<CHARACTER>, <CHARACTER>\\)'\\s*"
+              + "'" + fn + "\\(<BINARY>, <BINARY>\\)'",
           false);
       f.checkNull(fn + "(null, null)");
       f.checkNull(fn + "('12345', null)");
@@ -12634,6 +13037,7 @@ public class SqlOperatorTest {
         + " multiset[cast(null as double)]", true);
     f.checkBoolean("cast(null as double) member of multiset[1.1]", false);
     f.checkBoolean("1.1 member of multiset[cast(null as double)]", false);
+    f.checkBoolean("1.00 member of multiset[1.0]", true);
   }
 
   @Test void testMultisetUnionOperator() {
@@ -12799,6 +13203,14 @@ public class SqlOperatorTest {
         false);
     f.checkAggType("listagg('test')", "CHAR(4) NOT NULL");
     f.checkAggType("listagg('test', ', ')", "CHAR(4) NOT NULL");
+    // Test case for [CALCITE-7705]
+    // LISTAGG result type is never nullable
+    // Nullable without GROUP BY even for a non-nullable argument, since the
+    // input may be empty
+    f.checkColumnType("select listagg('test') from (values (1))", "CHAR(4)");
+    // A FILTER clause may exclude all rows, so the result is nullable
+    f.checkColumnType("select listagg('test') filter (where x > 1) "
+        + "from (values (1)) as t(x) group by x", "CHAR(4)");
     final String[] values1 = {"'hello'", "CAST(null AS CHAR)", "'world'", "'!'"};
     f.checkAgg("listagg(x)", values1, isSingle("hello,world,!    "));
     final String[] values2 = {"0", "1", "2", "3"};
@@ -12814,6 +13226,10 @@ public class SqlOperatorTest {
 
   private static void checkStringAggFunc(SqlOperatorFixture f) {
     final String[] values = {"'x'", "null", "'yz'"};
+    // Test case for [CALCITE-7705]
+    // LISTAGG result type is never nullable
+    f.checkColumnType("select string_agg('x', ',') from (values (1))",
+        "CHAR(1)");
     f.checkAgg("string_agg(x)", values, isSingle("x ,yz"));
     f.checkAgg("string_agg(x,':')", values, isSingle("x :yz"));
     f.checkAgg("string_agg(x,':' order by x)", values, isSingle("x :yz"));
@@ -12872,6 +13288,9 @@ public class SqlOperatorTest {
 
   private static void checkGroupConcatFunc(SqlOperatorFixture f) {
     final String[] values = {"'x'", "null", "'yz'"};
+    // Test case for [CALCITE-7705]
+    // LISTAGG result type is never nullable
+    f.checkColumnType("select group_concat('x') from (values (1))", "CHAR(1)");
     f.checkAgg("group_concat(x)", values, isSingle("x ,yz"));
     f.checkAgg("group_concat(x,':')", values, isSingle("x :yz"));
     f.checkAgg("group_concat(x,':' order by x)", values, isSingle("x :yz"));
@@ -13589,6 +14008,22 @@ public class SqlOperatorTest {
           "RecordType(INTEGER EXPR$0, INTEGER EXPR$1) NOT NULL ARRAY NOT NULL");
       f2.checkScalar("array(row(1, 2), row(3, 4))", "[{1, 2}, {3, 4}]",
           "RecordType(INTEGER NOT NULL EXPR$0, INTEGER NOT NULL EXPR$1) NOT NULL ARRAY NOT NULL");
+      // Tests for unification of UNKNOWN with other types; array() has a type
+      // of UNKNOWN ARRAY, yet the type of ARRAY() is inferred from other operands.
+      f2.checkScalar("array(array(1), array())", "[[1], []]",
+          "INTEGER NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
+      f2.checkScalar("array(array(), array(1))", "[[], [1]]",
+          "INTEGER NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
+      f2.checkScalar("array(array(row(1, 2)), array())", "[[{1, 2}], []]",
+          "RecordType(INTEGER NOT NULL EXPR$0, INTEGER NOT NULL EXPR$1) NOT NULL "
+              + "ARRAY NOT NULL ARRAY NOT NULL");
+      f2.checkScalar("array(array(), array(row(1, 2)))", "[[], [{1, 2}]]",
+          "RecordType(INTEGER NOT NULL EXPR$0, INTEGER NOT NULL EXPR$1) NOT NULL "
+              + "ARRAY NOT NULL ARRAY NOT NULL");
+      f2.checkScalar("array(array(array(1)), array())", "[[[1]], []]",
+          "INTEGER NOT NULL ARRAY NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
+      f2.checkScalar("array(array(), array(array(1)))", "[[], [[1]]]",
+          "INTEGER NOT NULL ARRAY NOT NULL ARRAY NOT NULL ARRAY NOT NULL");
       // checkFails
       f2.checkFails("^array(row(1), row(2, 3))^",
           "Parameters must be of the same type", false);
@@ -13605,6 +14040,32 @@ public class SqlOperatorTest {
           "[1         , 2         , Hi        , null]", "CHAR(10) ARRAY NOT NULL");
     };
     f.forEachLibrary(libraries, consumer);
+  }
+
+  /** Tests that empty collections created by the Spark
+   * {@code ARRAY()} and {@code MAP()} functions, whose element
+   * types are UNKNOWN, unify with collections with known types. */
+  @Test void testEmptyCollections() {
+    final SqlOperatorFixture f = fixture().withLibrary(SqlLibrary.SPARK);
+    f.checkScalar("array(map(1, 2), map())", "[{1=2}, {}]",
+        "(INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL ARRAY NOT NULL");
+    f.checkScalar("array(map(), map(1, 2))", "[{}, {1=2}]",
+        "(INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL ARRAY NOT NULL");
+    // Nested: empty collections inside a ROW unify field by field
+    f.checkScalar("array(row(array(), map()))", "[{[], {}}]",
+        "RecordType(UNKNOWN NOT NULL ARRAY NOT NULL EXPR$0, "
+            + "(UNKNOWN NOT NULL, UNKNOWN NOT NULL) MAP NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL");
+    f.checkScalar("array(row(array(1), map(1, 2)), row(array(), map()))",
+        "[{[1], {1=2}}, {[], {}}]",
+        "RecordType(INTEGER NOT NULL ARRAY NOT NULL EXPR$0, "
+            + "(INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL");
+    f.checkScalar("array(row(array(), map()), row(array(1), map(1, 2)))",
+        "[{[], {}}, {[1], {1=2}}]",
+        "RecordType(INTEGER NOT NULL ARRAY NOT NULL EXPR$0, "
+            + "(INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL");
   }
 
   @Test void testArrayQueryConstructor() {
@@ -13741,8 +14202,8 @@ public class SqlOperatorTest {
     f.checkFails("ARRAY[2,4,6][OFFSET(5)]",
         "Array index 5 is out of bounds", true);
     f.checkFails("^map['foo', 3, 'bar', 7][offset('bar')]^",
-        "Cannot apply 'OFFSET' to arguments of type 'OFFSET\\(<\\(CHAR\\(3\\)"
-            + ", INTEGER\\) MAP>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
+        "Cannot apply 'OFFSET' to arguments of type 'OFFSET\\(<MAP<CHAR\\(3\\)"
+            + ", INTEGER>>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
             + "<ARRAY>\\[OFFSET\\(<INTEGER>\\)\\]", false);
   }
 
@@ -13761,8 +14222,8 @@ public class SqlOperatorTest {
     f.checkFails("ARRAY[2,4,6][ORDINAL(5)]",
         "Array index 5 is out of bounds", true);
     f.checkFails("^map['foo', 3, 'bar', 7][ordinal('bar')]^",
-        "Cannot apply 'ORDINAL' to arguments of type 'ORDINAL\\(<\\(CHAR\\(3\\)"
-            + ", INTEGER\\) MAP>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
+        "Cannot apply 'ORDINAL' to arguments of type 'ORDINAL\\(<MAP<CHAR\\(3\\)"
+            + ", INTEGER>>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
             + "<ARRAY>\\[ORDINAL\\(<INTEGER>\\)\\]", false);
   }
 
@@ -13778,9 +14239,20 @@ public class SqlOperatorTest {
     f.checkScalar("ARRAY[2,4,6][SAFE_OFFSET(-1)]", isNullValue(), "INTEGER");
     f.checkScalar("ARRAY[2,4,6][SAFE_OFFSET(5)]", isNullValue(), "INTEGER");
     f.checkNull("ARRAY[2,4,6][SAFE_OFFSET(null)]");
+    // Test case for [CALCITE-5998] The SAFE_OFFSET operator can cause
+    // an index out of bounds exception; the index is not constant
+    f.check("select ARRAY[p3,p2,p1][SAFE_OFFSET(p0)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", isNullValue());
+    f.check("select ARRAY[p3,p2,p1][SAFE_OFFSET(p1)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", isNullValue());
+    f.check("select ARRAY[p3,p2,p1][SAFE_OFFSET(p3)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", 6);
     f.checkFails("^map['foo', 3, 'bar', 7][safe_offset('bar')]^",
-        "Cannot apply 'SAFE_OFFSET' to arguments of type 'SAFE_OFFSET\\(<\\(CHAR\\(3\\)"
-            + ", INTEGER\\) MAP>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
+        "Cannot apply 'SAFE_OFFSET' to arguments of type 'SAFE_OFFSET\\(<MAP<CHAR\\(3\\)"
+            + ", INTEGER>>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
             + "<ARRAY>\\[SAFE_OFFSET\\(<INTEGER>\\)\\]", false);
   }
 
@@ -13796,9 +14268,20 @@ public class SqlOperatorTest {
     f.checkScalar("ARRAY[2,4,6][SAFE_ORDINAL(-1)]", isNullValue(), "INTEGER");
     f.checkScalar("ARRAY[2,4,6][SAFE_ORDINAL(5)]", isNullValue(), "INTEGER");
     f.checkNull("ARRAY[2,4,6][SAFE_ORDINAL(null)]");
+    // Test case for [CALCITE-5998] The SAFE_OFFSET operator can cause
+    // an index out of bounds exception; the index is not constant
+    f.check("select ARRAY[p3,p2,p1][SAFE_ORDINAL(p0)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", isNullValue());
+    f.check("select ARRAY[p3,p2,p1][SAFE_ORDINAL(p1)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", isNullValue());
+    f.check("select ARRAY[p3,p2,p1][SAFE_ORDINAL(p3)]\n"
+            + "from (values (-1, 6, 4, 2)) as t(p0, p1, p2, p3)",
+        "INTEGER", 4);
     f.checkFails("^map['foo', 3, 'bar', 7][safe_ordinal('bar')]^",
-        "Cannot apply 'SAFE_ORDINAL' to arguments of type 'SAFE_ORDINAL\\(<\\(CHAR\\(3\\)"
-            + ", INTEGER\\) MAP>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
+        "Cannot apply 'SAFE_ORDINAL' to arguments of type 'SAFE_ORDINAL\\(<MAP<CHAR\\(3\\)"
+            + ", INTEGER>>, <CHAR\\(3\\)>\\)'\\. Supported form\\(s\\): "
             + "<ARRAY>\\[SAFE_ORDINAL\\(<INTEGER>\\)\\]", false);
   }
 
@@ -13913,6 +14396,22 @@ public class SqlOperatorTest {
     f1.checkScalar("map('k1', 1, 'k2', 2.0)",
         "{k1=1.0, k2=2.0}",
         "(CHAR(2) NOT NULL, DECIMAL(11, 1) NOT NULL) MAP NOT NULL");
+    f1.checkScalar("map('a', array(1), 'b', array())", "{a=[1], b=[]}",
+        "(CHAR(1) NOT NULL, INTEGER NOT NULL ARRAY NOT NULL) MAP NOT NULL");
+    f1.checkScalar("map('a', array(), 'b', array(1))", "{a=[], b=[1]}",
+        "(CHAR(1) NOT NULL, INTEGER NOT NULL ARRAY NOT NULL) MAP NOT NULL");
+    f1.checkScalar("map('a', map(1, 2), 'b', map())", "{a={1=2}, b={}}",
+        "(CHAR(1) NOT NULL, (INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL) MAP NOT NULL");
+    f1.checkScalar("map('a', map(), 'b', map(1, 2))", "{a={}, b={1=2}}",
+        "(CHAR(1) NOT NULL, (INTEGER NOT NULL, INTEGER NOT NULL) MAP NOT NULL) MAP NOT NULL");
+    // Avatica's conversion of MAP to STRING is broken, so we only check
+    // the type for the following 2 tests
+    f1.checkType("map('a', array(row(1, 2)), 'b', array())",
+        "(CHAR(1) NOT NULL, RecordType(INTEGER NOT NULL EXPR$0, INTEGER NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL) MAP NOT NULL");
+    f1.checkType("map('a', array(), 'b', array(row(1, 2)))",
+        "(CHAR(1) NOT NULL, RecordType(INTEGER NOT NULL EXPR$0, INTEGER NOT NULL EXPR$1) "
+            + "NOT NULL ARRAY NOT NULL) MAP NOT NULL");
   }
 
   @Test void testMapQueryConstructor() {
@@ -13996,11 +14495,11 @@ public class SqlOperatorTest {
     f.checkNull("ceiling(cast(null as double))");
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7692">[CALCITE-7692]
+   * FLOOR/CEIL of INTERVAL produces wrong results</a>. */
   @Test void testCeilFuncInterval() {
     final SqlOperatorFixture f = fixture();
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
     f.checkScalar("ceil(interval '3:4:5' hour to second)",
         "+4:00:00.000000", "INTERVAL HOUR TO SECOND NOT NULL");
     f.checkScalar("ceil(interval '-6.3' second)",
@@ -14229,11 +14728,11 @@ public class SqlOperatorTest {
             "-4", "INTEGER NOT NULL");
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7692">[CALCITE-7692]
+   * FLOOR/CEIL of INTERVAL produces wrong results</a>. */
   @Test void testFloorFuncInterval() {
     final SqlOperatorFixture f = fixture();
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
     f.checkScalar("floor(interval '3:4:5' hour to second)",
         "+3:00:00.000000",
         "INTERVAL HOUR TO SECOND NOT NULL");
@@ -14243,6 +14742,12 @@ public class SqlOperatorTest {
         "+5-00", "INTERVAL YEAR TO MONTH NOT NULL");
     f.checkScalar("floor(interval '-5-1' year to month)",
         "-6-00", "INTERVAL YEAR TO MONTH NOT NULL");
+    f.checkNull("floor(cast(null as interval year))");
+    if (!f.brokenTestsEnabled()) {
+      return;
+    }
+    // FLOOR(interval TO time unit) is not implemented; the validator accepts
+    // only DATE, TIME and TIMESTAMP before TO.
     f.checkScalar("floor(interval '-6.3' second to second)",
         "-7.000000", "INTERVAL SECOND NOT NULL");
     f.checkScalar("floor(interval '6-3' minute to second to minute)",
@@ -14259,7 +14764,6 @@ public class SqlOperatorTest {
         "201", "INTERVAL YEAR TO MONTH NOT NULL");
     f.checkScalar("floor(interval '1004-1' year to month to millennium)",
         "2001-00", "INTERVAL YEAR TO MONTH NOT NULL");
-    f.checkNull("floor(cast(null as interval year))");
   }
 
   @Test void testTimestampAdd() {
@@ -16043,11 +16547,23 @@ public class SqlOperatorTest {
     f.checkType("covar_pop(CAST(NULL AS INTEGER),CAST(NULL AS INTEGER))",
         "INTEGER");
     f.checkAggType("covar_pop(1.5, 2.5)", "DECIMAL(2, 1) NOT NULL");
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
-    // with zero values
-    f.checkAgg("covar_pop(x)", new String[]{}, isNullValue());
+    // [CALCITE-7696] Result type is the least restrictive of the two
+    // argument types, not the type of the first argument
+    f.checkAggType("covar_pop(1, cast(2 as double))", "DOUBLE NOT NULL");
+    f.checkAggType("covar_pop(1.5, cast(2 as double))", "DOUBLE NOT NULL");
+    f.checkAggType("covar_pop(1.5, 2)", "DECIMAL(11, 1) NOT NULL");
+    // A nullable argument makes the result nullable
+    f.checkAggType("covar_pop(1.5, cast(null as double))", "DOUBLE");
+    f.checkAggType("covar_pop(cast(null as integer), 2.5)", "DECIMAL(11, 1)");
+    f.checkAggType("covar_pop(cast(null as integer), cast(null as double))",
+        "DOUBLE");
+    // [CALCITE-7695] COVAR and REGR aggregate results should be nullable if
+    // either argument is nullable
+    f.checkAggType("covar_pop(1.5, cast(null as double))", "DOUBLE");
+    // Nullable without GROUP BY even for non-nullable arguments, since the
+    // input may be empty
+    f.checkColumnType("select covar_pop(1.5, 2.5) from (values (1))",
+        "DECIMAL(2, 1)");
   }
 
   @Test void testCovarSampFunc() {
@@ -16066,12 +16582,10 @@ public class SqlOperatorTest {
         "DECIMAL(19, 9)");
     f.checkType("covar_samp(CAST(NULL AS INTEGER),CAST(NULL AS INTEGER))",
         "INTEGER");
-    f.checkAggType("covar_samp(1.5, 2.5)", "DECIMAL(2, 1) NOT NULL");
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
+    f.checkAggType("covar_samp(1.5, 2.5)", "DECIMAL(2, 1)");
+    f.checkAggType("covar_samp(1, cast(2 as double))", "DOUBLE");
     // with zero values
-    f.checkAgg("covar_samp(x)", new String[]{}, isNullValue());
+    f.checkAgg("covar_samp(x, x)", new String[]{}, isNullValue());
   }
 
   @Test void testRegrSxxFunc() {
@@ -16091,11 +16605,10 @@ public class SqlOperatorTest {
     f.checkType("regr_sxx(CAST(NULL AS INTEGER), CAST(NULL AS INTEGER))",
         "INTEGER");
     f.checkAggType("regr_sxx(1.5, 2.5)", "DECIMAL(2, 1) NOT NULL");
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
-    // with zero values
-    f.checkAgg("regr_sxx(x)", new String[]{}, isNullValue());
+    f.checkAggType("regr_sxx(1, cast(2 as double))", "DOUBLE NOT NULL");
+    f.checkAggType("regr_sxx(1.5, cast(null as double))", "DOUBLE");
+    f.checkColumnType("select regr_sxx(1.5, 2.5) from (values (1))",
+        "DECIMAL(2, 1)");
   }
 
   @Test void testRegrSyyFunc() {
@@ -16115,11 +16628,12 @@ public class SqlOperatorTest {
     f.checkType("regr_syy(CAST(NULL AS INTEGER), CAST(NULL AS INTEGER))",
         "INTEGER");
     f.checkAggType("regr_syy(1.5, 2.5)", "DECIMAL(2, 1) NOT NULL");
-    if (!f.brokenTestsEnabled()) {
-      return;
-    }
-    // with zero values
-    f.checkAgg("regr_syy(x)", new String[]{}, isNullValue());
+    f.checkAggType("regr_syy(1, cast(2 as double))", "DOUBLE NOT NULL");
+    // [CALCITE-7695] COVAR and REGR aggregate results should be nullable if
+    // either argument is nullable
+    f.checkAggType("regr_syy(1.5, cast(null as double))", "DOUBLE");
+    f.checkColumnType("select regr_syy(1.5, 2.5) from (values (1))",
+        "DECIMAL(2, 1)");
   }
 
   @Test void testStddevPopFunc() {
@@ -16247,7 +16761,7 @@ public class SqlOperatorTest {
             false);
     f.checkType("var_samp(cast(null as varchar(2)))", "DECIMAL(19, 9)");
     f.checkType("var_samp(CAST(NULL AS INTEGER))", "INTEGER");
-    f.checkAggType("var_samp(DISTINCT 1.5)", "DECIMAL(2, 1) NOT NULL");
+    f.checkAggType("var_samp(DISTINCT 1.5)", "DECIMAL(2, 1)");
     final String[] values = {"0", "CAST(null AS FLOAT)", "3", "3"};
     if (!f.brokenTestsEnabled()) {
       return;
@@ -16275,7 +16789,7 @@ public class SqlOperatorTest {
             false);
     f.checkType("variance(cast(null as varchar(2)))", "DECIMAL(19, 9)");
     f.checkType("variance(CAST(NULL AS INTEGER))", "INTEGER");
-    f.checkAggType("variance(DISTINCT 1.5)", "DECIMAL(2, 1) NOT NULL");
+    f.checkAggType("variance(DISTINCT 1.5)", "DECIMAL(2, 1)");
 
     final String[] values2 = {"cast(64.34 as double)", "64.34", "64.34"};
     f.checkAgg("variance(x)", values2, isExactly(0));
@@ -16941,6 +17455,7 @@ public class SqlOperatorTest {
     f.checkType("CAST(2 AS SMALLINT) << CAST(3 AS SMALLINT)", "SMALLINT NOT NULL");
     f.checkType("CAST(2 AS INTEGER) << CAST(3 AS INTEGER)", "INTEGER NOT NULL");
     f.checkType("CAST(2 AS BIGINT) << CAST(3 AS BIGINT)", "BIGINT NOT NULL");
+    f.checkScalar("CAST(2 AS BIGINT) << CAST(3 AS BIGINT)", "16", "BIGINT NOT NULL");
 
     // === BigInt shifts with explicit BIGINT inputs ===
     f.checkScalar("CAST(1 AS BIGINT) << 62", BigInteger.ONE.shiftLeft(62).toString(),
@@ -16988,8 +17503,16 @@ public class SqlOperatorTest {
         "INTEGER UNSIGNED NOT NULL");
     f.checkScalar("CAST(1 AS INTEGER UNSIGNED) << 31", "2147483648", "INTEGER UNSIGNED NOT NULL");
     f.checkScalar("CAST(1 AS INTEGER UNSIGNED) << -1", "0", "INTEGER UNSIGNED NOT NULL");
+    // BIGINT UNSIGNED with the high bit set (2^63, built via 1 << 63), shifted
+    // left by a negative amount (i.e. right by 60): the implied right shift must
+    // be logical, not arithmetic (the raw long is negative).
+    f.checkScalar("CAST(1 AS BIGINT UNSIGNED) << 63 << -4",
+        "8", "BIGINT UNSIGNED NOT NULL");
 
     // === Negative shift counts ===
+    // A negative left shift shifts right by the normalized magnitude (here
+    // 32 - 2 = 30); it is not the same as a right shift by the given amount.
+    f.checkScalar("1 << -2", "0", "INTEGER NOT NULL"); // 1 >> 30
     f.checkScalar("8 << -1", "0", "INTEGER NOT NULL");
     f.checkScalar("16 << -2", "0", "INTEGER NOT NULL");
 
@@ -17061,6 +17584,7 @@ public class SqlOperatorTest {
     f.checkType("LEFTSHIFT(CAST(2 AS SMALLINT), CAST(3 AS SMALLINT))", "SMALLINT NOT NULL");
     f.checkType("LEFTSHIFT(CAST(2 AS INTEGER), CAST(3 AS INTEGER))", "INTEGER NOT NULL");
     f.checkType("LEFTSHIFT(CAST(2 AS BIGINT), CAST(3 AS BIGINT))", "BIGINT NOT NULL");
+    f.checkScalar("LEFTSHIFT(CAST(2 AS BIGINT), CAST(3 AS BIGINT))", "16", "BIGINT NOT NULL");
 
     // === BigInt shifts with explicit BIGINT inputs ===
     f.checkScalar("LEFTSHIFT(CAST(1 AS BIGINT), 62)",
@@ -17139,6 +17663,193 @@ public class SqlOperatorTest {
     f.checkNull("LEFTSHIFT(10, CAST(NULL AS INTEGER))");
     f.checkNull("LEFTSHIFT(CAST(NULL AS INTEGER), CAST(NULL AS INTEGER))");
     f.checkNull("LEFTSHIFT(CAST(NULL AS INTEGER UNSIGNED), 2)");
+  }
+
+  /**
+   * Test cases for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7639">[CALCITE-7639]
+   * Support bitwise right shift (&gt;&gt;) operator and RIGHTSHIFT function</a>.
+   */
+  @Test void testRightShiftScalarFunc() {
+    final SqlOperatorFixture f = fixture();
+    f.setFor(SqlStdOperatorTable.BIT_RIGHT_SHIFT, VmName.EXPAND);
+
+    // === Basic functionality ===
+    f.checkScalar("8 >> 2", "2", "INTEGER NOT NULL");
+    f.checkScalar("1024 >> 10", "1", "INTEGER NOT NULL");
+    f.checkScalar("0 >> 5", "0", "INTEGER NOT NULL");
+
+    // === Type coercion and signed (arithmetic) behavior ===
+    f.checkScalar("CAST(16 AS INTEGER) >> CAST(3 AS BIGINT)", "2", "INTEGER NOT NULL");
+    f.checkScalar("-20 >> 2", "-5", "INTEGER NOT NULL");
+    f.checkScalar("-40 >> 3", "-5", "INTEGER NOT NULL");
+    f.checkScalar("CAST(-20 AS TINYINT) >> CAST(2 AS TINYINT)", "-5", "TINYINT NOT NULL");
+
+    // === Verify return type matches first argument type ===
+    f.checkType("CAST(8 AS TINYINT) >> CAST(2 AS TINYINT)", "TINYINT NOT NULL");
+    f.checkType("CAST(8 AS SMALLINT) >> CAST(2 AS SMALLINT)", "SMALLINT NOT NULL");
+    f.checkType("CAST(8 AS INTEGER) >> CAST(2 AS INTEGER)", "INTEGER NOT NULL");
+    f.checkType("CAST(8 AS BIGINT) >> CAST(2 AS BIGINT)", "BIGINT NOT NULL");
+    f.checkScalar("CAST(8 AS BIGINT) >> CAST(2 AS BIGINT)", "2", "BIGINT NOT NULL");
+
+    // === BigInt shifts with explicit BIGINT inputs (arithmetic/sign-preserving) ===
+    f.checkScalar("CAST(4611686018427387904 AS BIGINT) >> 62", "1", "BIGINT NOT NULL"); // 2^62
+    f.checkScalar("CAST(9223372036854775807 AS BIGINT) >> 1",
+        BigInteger.valueOf(Long.MAX_VALUE).shiftRight(1).toString(), "BIGINT NOT NULL");
+    f.checkScalar("CAST(-1 AS BIGINT) >> 63", "-1", "BIGINT NOT NULL"); // sign bit preserved
+    f.checkScalar("CAST(-1 AS BIGINT) >> 1", "-1", "BIGINT NOT NULL");
+    f.checkScalar("CAST(1000000000 AS BIGINT) >> 5", "31250000", "BIGINT NOT NULL");
+
+    // === Shift amount normalized using modulo of the bit width ===
+    f.checkScalar("CAST(1024 AS BIGINT) >> 64", "1024", "BIGINT NOT NULL"); // 64 % 64 = 0
+    f.checkScalar("CAST(1024 AS BIGINT) >> 74", "1", "BIGINT NOT NULL"); // 74 % 64 = 10
+    f.checkScalar("1 >> 32", "1", "INTEGER NOT NULL"); // 32 % 32 = 0
+    f.checkScalar("123 >> 60", "0", "INTEGER NOT NULL"); // 60 % 32 = 28
+
+    // === Unsigned types ===
+    f.checkScalar("CAST(252 AS TINYINT UNSIGNED) >> 2", "63", "TINYINT UNSIGNED NOT NULL");
+    f.checkScalar("CAST(65280 AS SMALLINT UNSIGNED) >> 8", "255", "SMALLINT UNSIGNED NOT NULL");
+    f.checkScalar("CAST(4294901760 AS INTEGER UNSIGNED) >> 16", "65535",
+        "INTEGER UNSIGNED NOT NULL");
+    f.checkScalar("CAST(2147483648 AS INTEGER UNSIGNED) >> 31", "1", "INTEGER UNSIGNED NOT NULL");
+    f.checkScalar("CAST(1 AS INTEGER UNSIGNED) >> -1", "2147483648", "INTEGER UNSIGNED NOT NULL");
+    // BIGINT UNSIGNED with the high bit set (2^63, built via 1 << 63): the
+    // right shift must be logical, not arithmetic (the raw long is negative).
+    f.checkScalar("CAST(1 AS BIGINT UNSIGNED) << 63 >> 4",
+        "576460752303423488", "BIGINT UNSIGNED NOT NULL");
+
+    // A BIGINT shift amount is accepted (INTEGER family), but an unsigned shift
+    // amount is not: the second operand must be a signed integer type.
+    f.checkScalar("CAST(8 AS INTEGER) >> CAST(2 AS BIGINT)", "2", "INTEGER NOT NULL");
+    f.checkFails("^8 >> CAST(2 AS INTEGER UNSIGNED)^",
+        "Cannot apply '>>' to arguments of type '<INTEGER> >> <INTEGER UNSIGNED>'\\. "
+            + "Supported form\\(s\\): '<INTEGER> >> <INTEGER>'\\n"
+            + "'<UNSIGNED_NUMERIC> >> <INTEGER>'",
+        false);
+
+    // === Negative shift counts (normalized via modulo, then shifted the other way) ===
+    // A negative right shift shifts left by the normalized magnitude (here
+    // 32 - 2 = 30); it is not the same as a left shift by the given amount.
+    f.checkScalar("1 >> -2", "1073741824", "INTEGER NOT NULL"); // 1 << 30
+    f.checkScalar("8 >> -1", "0", "INTEGER NOT NULL");
+    f.checkScalar("16 >> -2", "0", "INTEGER NOT NULL");
+
+    // === Shift by zero and large shifts ===
+    f.checkScalar("0 >> 32", "0", "INTEGER NOT NULL");
+    f.checkScalar("0 >> 100", "0", "INTEGER NOT NULL");
+
+    // === Binary operands are not supported ===
+    // Unlike '<<', binary right shift is intentionally rejected until the
+    // endianness of bitwise shifts on binary is settled (see [CALCITE-7651]).
+    // A binary literal such as X'FF' already has type BINARY(1).
+    f.checkFails("^X'FF' >> 1^",
+        "Cannot apply '>>' to arguments of type '<BINARY\\(1\\)> >> <INTEGER>'\\. "
+            + "Supported form\\(s\\): '<INTEGER> >> <INTEGER>'\\n"
+            + "'<UNSIGNED_NUMERIC> >> <INTEGER>'",
+        false);
+    f.checkFails("^CAST(X'FF' AS VARBINARY) >> 1^",
+        "Cannot apply '>>' to arguments of type '<VARBINARY> >> <INTEGER>'\\. "
+            + "Supported form\\(s\\): '<INTEGER> >> <INTEGER>'\\n"
+            + "'<UNSIGNED_NUMERIC> >> <INTEGER>'",
+        false);
+
+    // === Invalid argument types ===
+    f.checkFails("^1.2 >> 2^",
+        "Cannot apply '>>' to arguments of type '<DECIMAL\\(2, 1\\)> >> <INTEGER>'\\. Supported "
+            + "form\\(s\\): '<INTEGER> >> <INTEGER>'\\n'<UNSIGNED_NUMERIC> "
+            + ">> <INTEGER>'",
+        false);
+
+    // === Null propagation ===
+    f.checkNull("CAST(NULL AS INTEGER) >> 5");
+    f.checkNull("10 >> CAST(NULL AS INTEGER)");
+    f.checkNull("CAST(NULL AS INTEGER) >> CAST(NULL AS INTEGER)");
+    f.checkNull("CAST(NULL AS INTEGER UNSIGNED) >> 2");
+  }
+
+  @Test void testRightShiftFunctionCall() {
+    final SqlOperatorFixture f = fixture();
+    f.setFor(SqlStdOperatorTable.BIT_RIGHT_SHIFT, VmName.EXPAND);
+
+    // === Basic functionality ===
+    f.checkScalar("RIGHTSHIFT(8, 2)", "2", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(1024, 10)", "1", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(0, 5)", "0", "INTEGER NOT NULL");
+
+    // === Type coercion and signed (arithmetic) behavior ===
+    f.checkScalar("RIGHTSHIFT(CAST(16 AS INTEGER), CAST(3 AS BIGINT))", "2", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(-20, 2)", "-5", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(-40, 3)", "-5", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(-20 AS TINYINT), CAST(2 AS TINYINT))", "-5", "TINYINT NOT NULL");
+
+    // === Verify return type matches first argument type ===
+    f.checkType("RIGHTSHIFT(CAST(8 AS TINYINT), CAST(2 AS TINYINT))", "TINYINT NOT NULL");
+    f.checkType("RIGHTSHIFT(CAST(8 AS SMALLINT), CAST(2 AS SMALLINT))", "SMALLINT NOT NULL");
+    f.checkType("RIGHTSHIFT(CAST(8 AS INTEGER), CAST(2 AS INTEGER))", "INTEGER NOT NULL");
+    f.checkType("RIGHTSHIFT(CAST(8 AS BIGINT), CAST(2 AS BIGINT))", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(8 AS BIGINT), CAST(2 AS BIGINT))", "2", "BIGINT NOT NULL");
+
+    // === BigInt shifts with explicit BIGINT inputs ===
+    f.checkScalar("RIGHTSHIFT(CAST(4611686018427387904 AS BIGINT), 62)", "1", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(9223372036854775807 AS BIGINT), 1)",
+        BigInteger.valueOf(Long.MAX_VALUE).shiftRight(1).toString(), "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(-1 AS BIGINT), 63)", "-1", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(-1 AS BIGINT), 1)", "-1", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(1000000000 AS BIGINT), 5)", "31250000", "BIGINT NOT NULL");
+
+    // === Shift amount normalized using modulo of the bit width ===
+    f.checkScalar("RIGHTSHIFT(CAST(1024 AS BIGINT), 64)", "1024", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(1024 AS BIGINT), 74)", "1", "BIGINT NOT NULL");
+    f.checkScalar("RIGHTSHIFT(1, 32)", "1", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(123, 60)", "0", "INTEGER NOT NULL");
+
+    // === Unsigned types ===
+    f.checkScalar("RIGHTSHIFT(CAST(252 AS TINYINT UNSIGNED), 2)", "63",
+        "TINYINT UNSIGNED NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(65280 AS SMALLINT UNSIGNED), 8)", "255",
+        "SMALLINT UNSIGNED NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(4294901760 AS INTEGER UNSIGNED), 16)", "65535",
+        "INTEGER UNSIGNED NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(2147483648 AS INTEGER UNSIGNED), 31)", "1",
+        "INTEGER UNSIGNED NOT NULL");
+    f.checkScalar("RIGHTSHIFT(CAST(1 AS INTEGER UNSIGNED), -1)", "2147483648",
+        "INTEGER UNSIGNED NOT NULL");
+
+    // === Negative shifts ===
+    f.checkScalar("RIGHTSHIFT(8, -1)", "0", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(16, -2)", "0", "INTEGER NOT NULL");
+
+    // === Large shifts ===
+    f.checkScalar("RIGHTSHIFT(0, 32)", "0", "INTEGER NOT NULL");
+    f.checkScalar("RIGHTSHIFT(0, 100)", "0", "INTEGER NOT NULL");
+
+    // === Binary operands are not supported ===
+    // Unlike LEFTSHIFT, binary right shift is intentionally rejected until the
+    // endianness of bitwise shifts on binary is settled (see [CALCITE-7651]).
+    // A binary literal such as X'FF' already has type BINARY(1).
+    f.checkFails("^RIGHTSHIFT(X'FF', 1)^",
+        "Cannot apply 'RIGHTSHIFT' to arguments of type 'RIGHTSHIFT\\(<BINARY\\(1\\)>, <INTEGER>\\)'\\. Supported form\\(s\\): 'RIGHTSHIFT\\(<INTEGER>, <INTEGER>\\)'\\n'RIGHTSHIFT\\(<UNSIGNED_NUMERIC>, <INTEGER>\\)'",
+        false);
+    f.checkFails("^RIGHTSHIFT(CAST(X'FF' AS VARBINARY), 1)^",
+        "Cannot apply 'RIGHTSHIFT' to arguments of type 'RIGHTSHIFT\\(<VARBINARY>, <INTEGER>\\)'\\. Supported form\\(s\\): 'RIGHTSHIFT\\(<INTEGER>, <INTEGER>\\)'\\n'RIGHTSHIFT\\(<UNSIGNED_NUMERIC>, <INTEGER>\\)'",
+        false);
+
+    // === Invalid types ===
+    f.checkFails("^RIGHTSHIFT(1.2, 2)^",
+        "Cannot apply 'RIGHTSHIFT' to arguments of type 'RIGHTSHIFT\\(<DECIMAL\\(2, 1\\)>, <INTEGER>\\)'\\. Supported form\\(s\\): 'RIGHTSHIFT\\(<INTEGER>, <INTEGER>\\)'\\n'RIGHTSHIFT\\(<UNSIGNED_NUMERIC>, <INTEGER>\\)'",
+        false);
+    // A BIGINT shift amount is accepted, but an unsigned shift amount is not:
+    // the second argument must be a signed integer type.
+    f.checkScalar("RIGHTSHIFT(8, CAST(2 AS BIGINT))", "2", "INTEGER NOT NULL");
+    f.checkFails("^RIGHTSHIFT(8, CAST(2 AS INTEGER UNSIGNED))^",
+        "Cannot apply 'RIGHTSHIFT' to arguments of type 'RIGHTSHIFT\\(<INTEGER>, <INTEGER UNSIGNED>\\)'\\. Supported form\\(s\\): 'RIGHTSHIFT\\(<INTEGER>, <INTEGER>\\)'\\n'RIGHTSHIFT\\(<UNSIGNED_NUMERIC>, <INTEGER>\\)'",
+        false);
+
+    // === Nulls ===
+    f.checkNull("RIGHTSHIFT(CAST(NULL AS INTEGER), 5)");
+    f.checkNull("RIGHTSHIFT(10, CAST(NULL AS INTEGER))");
+    f.checkNull("RIGHTSHIFT(CAST(NULL AS INTEGER), CAST(NULL AS INTEGER))");
+    f.checkNull("RIGHTSHIFT(CAST(NULL AS INTEGER UNSIGNED), 2)");
   }
 
   /**
@@ -17695,11 +18406,33 @@ public class SqlOperatorTest {
     final Consumer<SqlOperatorFixture> consumer = f -> {
       f.checkAgg("arg_min(mod(x, 3), x)", xValues, isSingle("2"));
       f.checkAgg("arg_max(mod(x, 3), x)", xValues, isSingle("1"));
+      f.checkAggType("arg_min(1, 2)", "INTEGER NOT NULL");
+      f.checkAggType("arg_max(1, 2)", "INTEGER NOT NULL");
+      // Test cases for [CALCITE-7706]
+      // ARG_MIN ignores nullability of second argument
+      f.checkAggType("arg_min(1, cast(null as integer))", "INTEGER");
+      f.checkAggType("arg_max(1, cast(null as integer))", "INTEGER");
+      f.checkAggType("arg_min(cast(null as integer), 2)", "INTEGER");
+      f.checkAggType("arg_max(cast(null as integer), 2)", "INTEGER");
+      // Nullable without GROUP BY even for non-nullable arguments, since the
+      // input may be empty
+      f.checkColumnType("select arg_min(1, 2) from (values (1))", "INTEGER");
+      // Test cases for [CALCITE-7862]
+      // ARG_MIN and ARG_MAX fail when the key is an ARRAY, MAP or ROW
+      f.checkAgg("arg_min(x, array[mod(x, 3), x])", xValues, isSingle("3"));
+      f.checkAgg("arg_max(x, array[mod(x, 3), x])", xValues, isSingle("5"));
     };
 
     final Consumer<SqlOperatorFixture> consumer2 = f -> {
       f.checkAgg("min_by(mod(x, 3), x)", xValues, isSingle("2"));
       f.checkAgg("max_by(mod(x, 3), x)", xValues, isSingle("1"));
+      // Test cases for [CALCITE-7706]
+      // ARG_MIN ignores nullability of second argument
+      f.checkAggType("min_by(1, cast(null as integer))", "INTEGER");
+      f.checkAggType("max_by(1, cast(null as integer))", "INTEGER");
+      // Test cases for [CALCITE-7862]
+      f.checkAgg("min_by(x, array[mod(x, 3), x])", xValues, isSingle("3"));
+      f.checkAgg("max_by(x, array[mod(x, 3), x])", xValues, isSingle("5"));
     };
 
     consumer.accept(f0);

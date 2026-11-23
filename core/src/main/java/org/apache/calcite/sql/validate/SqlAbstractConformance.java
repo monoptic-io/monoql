@@ -33,6 +33,10 @@ public abstract class SqlAbstractConformance implements SqlConformance {
     return SqlConformanceEnum.DEFAULT.allowCharLiteralAlias();
   }
 
+  @Override public boolean allowWithinGroupOverAggregate() {
+    return SqlConformanceEnum.DEFAULT.allowWithinGroupOverAggregate();
+  }
+
   @Override public boolean isSupportedDualTable() {
     return SqlConformanceEnum.DEFAULT.isSupportedDualTable();
   }
@@ -149,6 +153,10 @@ public abstract class SqlAbstractConformance implements SqlConformance {
     return SqlConformanceEnum.DEFAULT.allowQualifyingCommonColumn();
   }
 
+  @Override public boolean allowLambdaClosure() {
+    return SqlConformanceEnum.DEFAULT.allowLambdaClosure();
+  }
+
   @Override public boolean allowAliasUnnestItems() {
     return SqlConformanceEnum.DEFAULT.allowAliasUnnestItems();
   }
@@ -171,5 +179,17 @@ public abstract class SqlAbstractConformance implements SqlConformance {
 
   @Override public boolean supportsUnsignedTypes() {
     return SqlConformanceEnum.DEFAULT.supportsUnsignedTypes();
+  }
+
+  @Override public boolean isDistinctOnAllowed() {
+    return SqlConformanceEnum.DEFAULT.isDistinctOnAllowed();
+  }
+
+  @Override public boolean isCorrelatedAggregateAllowed() {
+    return SqlConformanceEnum.DEFAULT.isCorrelatedAggregateAllowed();
+  }
+
+  @Override public boolean isPipeSyntaxAllowed() {
+    return SqlConformanceEnum.DEFAULT.isPipeSyntaxAllowed();
   }
 }

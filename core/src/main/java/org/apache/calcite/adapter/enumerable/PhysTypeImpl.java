@@ -19,6 +19,7 @@ package org.apache.calcite.adapter.enumerable;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
 import org.apache.calcite.linq4j.Ord;
 import org.apache.calcite.linq4j.function.Function1;
+import org.apache.calcite.linq4j.function.Predicate1;
 import org.apache.calcite.linq4j.tree.BlockBuilder;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
@@ -327,13 +328,10 @@ public class PhysTypeImpl implements PhysType {
       final Expression fieldComparator = generateCollatorExpression(fieldType.getCollation());
       Expression arg0 = fieldReference(parameterV0, index);
       Expression arg1 = fieldReference(parameterV1, index);
-      switch (Primitive.flavor(fieldClass(index))) {
-      case OBJECT:
+      if (Primitive.flavor(fieldClass(index)) == Primitive.Flavor.OBJECT
+          && !isComposite(fieldType)) {
         arg0 = EnumUtils.convert(arg0, Comparable.class);
         arg1 = EnumUtils.convert(arg1, Comparable.class);
-        break;
-      default:
-        break;
       }
       final boolean nullsFirst =
           collation.nullDirection
@@ -345,17 +343,13 @@ public class PhysTypeImpl implements PhysType {
           Expressions.statement(
               Expressions.assign(
                   parameterC,
-                  Expressions.call(
-                      Utilities.class,
+                  generateComparison(fieldType,
                       fieldNullable(index)
                           ? (nullsFirst != descending
                           ? "compareNullsFirst"
                           : "compareNullsLast")
                           : "compare",
-                      Expressions.list(
-                          arg0,
-                          arg1)
-                          .appendIfNotNull(fieldComparator)))));
+                      arg0, arg1, fieldComparator))));
       body.add(
           Expressions.ifThen(
               Expressions.notEqual(
@@ -455,13 +449,10 @@ public class PhysTypeImpl implements PhysType {
       final Expression fieldComparator = generateCollatorExpression(fieldType.getCollation());
       Expression arg0 = fieldReference(parameterV0, index);
       Expression arg1 = fieldReference(parameterV1, index);
-      switch (Primitive.flavor(fieldClass(index))) {
-      case OBJECT:
+      if (Primitive.flavor(fieldClass(index)) == Primitive.Flavor.OBJECT
+          && !isComposite(fieldType)) {
         arg0 = EnumUtils.convert(arg0, Comparable.class);
         arg1 = EnumUtils.convert(arg1, Comparable.class);
-        break;
-      default:
-        break;
       }
       final boolean descending =
           fieldCollation.getDirection()
@@ -470,13 +461,9 @@ public class PhysTypeImpl implements PhysType {
           Expressions.statement(
               Expressions.assign(
                   parameterC,
-                  Expressions.call(
-                      Utilities.class,
+                  generateComparison(fieldType,
                       compareMethodNameFunction.apply(fieldCollation),
-                      Expressions.list(
-                          arg0,
-                          arg1)
-                          .appendIfNotNull(fieldComparator)))));
+                      arg0, arg1, fieldComparator))));
       body.add(
           Expressions.ifThen(
               Expressions.notEqual(
@@ -499,7 +486,10 @@ public class PhysTypeImpl implements PhysType {
                 ImmutableList.of(parameterV0, parameterV1),
                 body.toBlock()));
 
-    if (EnumerableRules.BRIDGE_METHODS) {
+    // When javaRowClass is Object the primary compare method already has the
+    // signature compare(Object, Object), so a bridge method would be a
+    // duplicate and the generated Comparator would fail to compile.
+    if (EnumerableRules.BRIDGE_METHODS && javaRowClass != Object.class) {
       final ParameterExpression parameterO0 =
           Expressions.parameter(Object.class, "o0");
       final ParameterExpression parameterO1 =
@@ -535,10 +525,55 @@ public class PhysTypeImpl implements PhysType {
       // merge join keys must be sorted in ascending order, nulls last
       assert fieldCollation.nullDirection == RelFieldCollation.NullDirection.LAST;
       assert fieldCollation.getDirection() == RelFieldCollation.Direction.ASCENDING;
-      return fieldNullable(fieldCollation.getFieldIndex())
+      final int index = fieldCollation.getFieldIndex();
+      // Even a non-null ROW can have NULL fields that prevent a join match.
+      return fieldNullable(index) || rowType.getFieldList().get(index).getType().isStruct()
           ? "compareNullsLastForMergeJoin"
           : "compare";
     });
+  }
+
+  private static boolean isComposite(RelDataType type) {
+    return type.isStruct()
+        || type.getComponentType() != null
+        || type.getSqlTypeName() == SqlTypeName.MAP;
+  }
+
+  /** ROW, ARRAY, MULTISET and MAP sort keys are not Comparable.
+   * Use the same element-wise comparator as the single-key sort path. */
+  private static Expression generateComparison(RelDataType type, String method,
+      Expression left, Expression right, @Nullable Expression collator) {
+    if (isComposite(type)) {
+      // Composite types have no collation of their own, so collator is unused here.
+      final String compositeMethod;
+      switch (method) {
+      case "compare":
+        compositeMethod = "compareComposite";
+        break;
+      case "compareNullsFirst":
+        compositeMethod = "compareCompositeNullsFirst";
+        break;
+      case "compareNullsLast":
+        compositeMethod = "compareCompositeNullsLast";
+        break;
+      case "compareNullsLastForMergeJoin":
+        compositeMethod = "compareCompositeNullsLastForMergeJoin";
+        // Make sure merge join does not match ROW(1, NULL) = ROW(1, NULL);
+        // this is the same check that hash join applies through generateNullAwareAccessor
+        if (type.isStruct()) {
+          final ParameterExpression row = Expressions.parameter(Object.class, "row");
+          return Expressions.call(Utilities.class, compositeMethod, left, right,
+              Expressions.lambda(Predicate1.class,
+                  structIsNullOrContainsNullExpression(row, type), row));
+        }
+        break;
+      default:
+        throw new AssertionError("unexpected comparison method: " + method);
+      }
+      return Expressions.call(Utilities.class, compositeMethod, left, right);
+    }
+    return Expressions.call(Utilities.class, method,
+        Expressions.list(left, right).appendIfNotNull(collator));
   }
 
   @Override public RelDataType getRowType() {
@@ -582,7 +617,58 @@ public class PhysTypeImpl implements PhysType {
   }
 
   @Override public @Nullable Expression comparer() {
-    return format.comparer();
+    final Expression comparer = format.comparer();
+    if (comparer != null) {
+      // ARRAY compares nested arrays by content, but a List or Map compares
+      // the Object[] values it contains by reference.
+      if (format == JavaRowFormat.ARRAY && containsStructInCollection(rowType)) {
+        return Expressions.call(BuiltInMethod.DEEP_COMPARER.method);
+      }
+      return comparer;
+    }
+    if (anyFieldContainsStruct(rowType)) {
+      // A row or key containing struct (ROW) values needs deep equality;
+      // the default equality of the runtime representations of struct values (Object[], List)
+      // compares nested Object[] values by reference. Here we implement the "not
+      // distinct" semantics used by GROUP BY, DISTINCT and set operations.
+      return Expressions.call(BuiltInMethod.DEEP_COMPARER.method);
+    }
+    return null;
+  }
+
+  /** Returns whether a struct occurs inside a collection or map, including
+   * collections and maps nested in struct fields. Plain nested structs do not
+   * require overriding the ARRAY format's comparer. */
+  private static boolean containsStructInCollection(RelDataType type) {
+    if (type.isStruct()) {
+      return type.getFieldList().stream()
+          .anyMatch(f -> containsStructInCollection(f.getType()));
+    }
+    return containsStruct(type);
+  }
+
+  /** Returns whether any field of {@code rowType} contains a struct value:
+   * the field is itself a struct, or a collection or map whose elements
+   * contain one. */
+  private static boolean anyFieldContainsStruct(RelDataType rowType) {
+    return rowType.getFieldList().stream()
+        .anyMatch(f -> containsStruct(f.getType()));
+  }
+
+  private static boolean containsStruct(RelDataType type) {
+    if (type.isStruct()) {
+      return true;
+    }
+    final RelDataType componentType = type.getComponentType();
+    if (componentType != null && containsStruct(componentType)) {
+      return true;
+    }
+    final RelDataType keyType = type.getKeyType();
+    if (keyType != null && containsStruct(keyType)) {
+      return true;
+    }
+    final RelDataType valueType = type.getValueType();
+    return valueType != null && containsStruct(valueType);
   }
 
   private List<Expression> fieldReferences(
@@ -761,14 +847,49 @@ public class PhysTypeImpl implements PhysType {
     Expression exp = getListExpressionAllowSingleElement(list);
     for (int i = list.size() - 1; i >= 0; i--) {
       if (nullExclusionFlags.get(i)) {
+        final RelDataType fieldType =
+            rowType.getFieldList().get(fields.get(i)).getType();
+        // Under the SQL = operator, a NULL never compares TRUE. A
+        // ROW containing a NULL field (at any nesting depth) cannot
+        // compare TRUE either: the pairwise comparison of its fields yields
+        // UNKNOWN or FALSE. In both these cases the result is null.
+        final Expression isNull = fieldType.isStruct()
+            ? structIsNullOrContainsNullExpression(list.get(i), fieldType)
+            : Expressions.equal(list.get(i), Expressions.constant(null));
         exp =
-            Expressions.condition(
-                Expressions.equal(list.get(i), Expressions.constant(null)),
+            Expressions.condition(isNull,
                 Expressions.constant(null),
                 exp);
       }
     }
     return Expressions.lambda(Function1.class, exp, v1);
+  }
+
+  /** Returns an expression that evaluates whether {@code e}, a value of
+   * ROW type {@code type}, is null or has a null field, descending into
+   * struct-typed fields (but not into collection-typed fields). */
+  private static Expression structIsNullOrContainsNullExpression(Expression e,
+      RelDataType type) {
+    Expression result = Expressions.equal(e, Expressions.constant(null));
+    for (Ord<RelDataTypeField> field : Ord.zip(type.getFieldList())) {
+      final RelDataType fieldType = field.e.getType();
+      if (!fieldType.isStruct() && !fieldType.isNullable()) {
+        continue;
+      }
+      // structAccess handles both runtime representations of a struct value
+      // (Object[] and List); it is only evaluated when e is not null,
+      // thanks to the short-circuit OR.
+      final Expression access =
+          Expressions.call(BuiltInMethod.STRUCT_ACCESS.method, e,
+              Expressions.constant(field.i),
+              Expressions.constant(field.e.getName()));
+      result =
+          Expressions.orElse(result,
+              fieldType.isStruct()
+                  ? structIsNullOrContainsNullExpression(access, fieldType)
+                  : Expressions.equal(access, Expressions.constant(null)));
+    }
+    return result;
   }
 
   @Override public Expression fieldReference(

@@ -116,6 +116,7 @@ subprojects {
         passProperty("user.timezone", "UTC")
         passProperty("calcite.avatica.version", "calcite.avatica".v)
         passProperty("gradle.rootDir", rootDir.toString())
+        passProperty("calcite.model.classes.allowed", "org.,java.lang.")
         for (e in System.getProperties().stringPropertyNames()) {
             if (e.startsWith("calcite.") || e.startsWith("avatica.")) {
                 passProperty(e)

@@ -497,6 +497,48 @@ group by rollup(gender);
 
 !ok
 
+# [CALCITE-7828] Aggregate whose grouping sets include () returns no rows on empty input
+# The empty grouping set, (), yields one row, as a query with no GROUP BY
+# These sql programs had been validated in PostgreSQL
+
+select gender, count(*) as c
+from emp
+where false
+group by rollup(gender);
++--------+---+
+| GENDER | C |
++--------+---+
+|        | 0 |
++--------+---+
+(1 row)
+
+!ok
+
+select gender, count(*) as c
+from emp
+where false
+group by grouping sets (gender, ());
++--------+---+
+| GENDER | C |
++--------+---+
+|        | 0 |
++--------+---+
+(1 row)
+
+!ok
+
+select gender, count(*) as c
+from emp
+where false
+group by grouping sets (gender, deptno);
++--------+---+
+| GENDER | C |
++--------+---+
++--------+---+
+(0 rows)
+
+!ok
+
 # ROLLUP plus ORDER BY
 select gender, count(*) as c
 from emp
@@ -2987,6 +3029,29 @@ from "scott".emp;
 
 !ok
 
+# [CALCITE-7696] COVAR result type is derived only from first argument type
+# The result type is the least restrictive of the two argument types;
+# COVAR_POP(INT, DOUBLE) computes on DOUBLE, not INT
+select
+  covar_pop(x, y) as cp,
+  covar_samp(x, y) as cs,
+  regr_sxx(x, y) as sxx,
+  regr_syy(x, y) as syy
+from (values (1, 0.5e0), (2, 1.0e0)) as t(x, y);
+CP DOUBLE(15)
+CS DOUBLE(15)
+SXX DOUBLE(15)
+SYY DOUBLE(15)
+!type
++-------+------+-------+-----+
+| CP    | CS   | SXX   | SYY |
++-------+------+-------+-----+
+| 0.125 | 0.25 | 0.125 | 0.5 |
++-------+------+-------+-----+
+(1 row)
+
+!ok
+
 # [CALCITE-1776, CALCITE-2402] REGR_COUNT with group by
 SELECT SAL, regr_count(COMM, SAL) as "REGR_COUNT(COMM, SAL)",
    regr_count(EMPNO, SAL) as "REGR_COUNT(EMPNO, SAL)"
@@ -3353,6 +3418,30 @@ select listagg(ename) as combined_name from emp;
 +-------------------------------------------------------+
 | Jane ,Bob  ,Eric ,Susan,Alice,Adam ,Eve  ,Grace,Wilma |
 +-------------------------------------------------------+
+(1 row)
+
+!ok
+
+# [CALCITE-7705] LISTAGG result type is never nullable
+# Empty input yields NULL even though the argument is NOT NULL.
+select listagg(v, ',') as r from (values ('a')) as t(v) where false;
++---+
+| R |
++---+
+|   |
++---+
+(1 row)
+
+!ok
+
+# The IS NULL test must not be simplified away based on the result type.
+select r is null as n from (
+  select listagg(v, ',') as r from (values ('a')) as t(v) where false);
++------+
+| N    |
++------+
+| true |
++------+
 (1 row)
 
 !ok
@@ -3819,6 +3908,36 @@ group by deptno;
 
 !ok
 
+# [CALCITE-7706] ARG_MIN ignores nullability of second argument
+# Rows whose comparator is NULL are skipped, so a group where every
+# comparator value is NULL yields NULL even though the value argument
+# is NOT NULL. ARG_MAX behaves the same.
+select g, arg_min(v, c) as mi, arg_max(v, c) as ma
+from (values (1, 10, cast(null as integer))) as t(g, v, c)
+group by g;
++---+----+----+
+| G | MI | MA |
++---+----+----+
+| 1 |    |    |
++---+----+----+
+(1 row)
+
+!ok
+
+# The IS NULL test must not be simplified away based on the result type.
+select mi is null as n1, ma is null as n2 from (
+  select g, arg_min(v, c) as mi, arg_max(v, c) as ma
+  from (values (1, 10, cast(null as integer))) as t(g, v, c)
+  group by g);
++------+------+
+| N1   | N2   |
++------+------+
+| true | true |
++------+------+
+(1 row)
+
+!ok
+
 # ARG_MIN, ARG_MAX applied to an integer.
 select arg_min(deptno, empno) as mi,
   arg_max(deptno, empno) as ma,
@@ -3833,6 +3952,43 @@ from emp;
 
 !ok
 
+# [CALCITE-7862] ARG_MIN and ARG_MAX fail with "Unable to implement" when
+# the key is an ARRAY, MAP or ROW.
+# Keys compare as in MIN and MAX; a row whose key is NULL is skipped.
+select arg_min(x, v) as mi, arg_max(x, v) as ma, min(v) as mn, max(v) as mx
+from (values (1, array[3, 1]), (2, array[1, 5]), (3, array[1, 4]),
+    (4, null)) as t(x, v);
++----+----+--------+--------+
+| MI | MA | MN     | MX     |
++----+----+--------+--------+
+|  3 |  1 | [1, 4] | [3, 1] |
++----+----+--------+--------+
+(1 row)
+
+!ok
+
+select arg_min(x, v) as mi, arg_max(x, v) as ma, min(v) as mn, max(v) as mx
+from (values (1, map['a', 2]), (2, map['a', 1]), (3, map['b', 0])) as t(x, v);
++----+----+-------+-------+
+| MI | MA | MN    | MX    |
++----+----+-------+-------+
+|  2 |  3 | {a=1} | {b=0} |
++----+----+-------+-------+
+(1 row)
+
+!ok
+
+select arg_min(x, v) as mi, arg_max(x, v) as ma, min(v) as mn, max(v) as mx
+from (values (1, row(2, 'b')), (2, row(1, 'a')), (3, row(1, 'c'))) as t(x, v);
++----+----+--------+--------+
+| MI | MA | MN     | MX     |
++----+----+--------+--------+
+|  2 |  1 | {1, a} | {2, b} |
++----+----+--------+--------+
+(1 row)
+
+!ok
+
 # DISTINCT query with ORDER BY on aggregate when there is an implicit cast
 select distinct sum(deptno + '1') as deptsum from dept order by 1;
 +---------+
@@ -3840,6 +3996,119 @@ select distinct sum(deptno + '1') as deptsum from dept order by 1;
 +---------+
 |     104 |
 +---------+
+(1 row)
+
+!ok
+
+# [CALCITE-6767] PERCENTILE_CONT/PERCENTILE_DISC syntax not supported.
+# These sql programs were validated in PostgreSQL
+select
+  percentile_cont(0.5) within group (order by empno) as c,
+  percentile_disc(0.5) within group (order by empno) as d
+from emp;
++------+------+
+| C    | D    |
++------+------+
+| 7785 | 7782 |
++------+------+
+(1 row)
+
+!ok
+
+# PERCENTILE_CONT / PERCENTILE_DISC with GROUP BY.
+select deptno,
+  percentile_cont(0.5) within group (order by empno) as c,
+  percentile_disc(0.5) within group (order by empno) as d
+from emp
+group by deptno
+order by deptno;
++--------+------+------+
+| DEPTNO | C    | D    |
++--------+------+------+
+|     10 | 7839 | 7839 |
+|     20 | 7788 | 7788 |
+|     30 | 7676 | 7654 |
++--------+------+------+
+(3 rows)
+
+!ok
+
+# PERCENTILE_CONT / PERCENTILE_DISC honour a descending ORDER BY.
+select
+  percentile_disc(0.25) within group (order by empno desc) as d
+from emp;
++------+
+| D    |
++------+
+| 7876 |
++------+
+(1 row)
+
+!ok
+
+# PERCENTILE_CONT / PERCENTILE_DISC on DOUBLE values.
+select
+  percentile_cont(0.5) within group (order by v) as c,
+  percentile_disc(0.5) within group (order by v) as d
+from (values (cast(1.5 as double)),
+             (cast(2.5 as double)),
+             (cast(4.5 as double)),
+             (cast(8.5 as double))) as t(v);
++-----+-----+
+| C   | D   |
++-----+-----+
+| 3.5 | 2.5 |
++-----+-----+
+(1 row)
+
+!ok
+
+# PERCENTILE_CONT / PERCENTILE_DISC on large DECIMAL values that are very
+# close together. These 19-digit values exceed the ~15-16 significant digits a
+# double can hold, so the linear interpolation must be done in BigDecimal;
+# converting to double would round 9999999999999999990 to 1.0E19 and lose the
+# trailing digits.
+select
+  percentile_cont(0.5) within group (order by v) as c,
+  percentile_disc(0.5) within group (order by v) as d
+from (values (cast('9999999999999999990' as decimal(19, 0))),
+             (cast('9999999999999999992' as decimal(19, 0)))) as t(v);
++-----------------------+---------------------+
+| C                     | D                   |
++-----------------------+---------------------+
+| 9999999999999999991.0 | 9999999999999999990 |
++-----------------------+---------------------+
+(1 row)
+
+!ok
+
+# A three-row large DECIMAL group whose 0.75 percentile interpolates between
+# two adjacent, nearly-equal values.
+select
+  percentile_cont(0.75) within group (order by v) as c
+from (values (cast('9999999999999999990' as decimal(19, 0))),
+             (cast('9999999999999999994' as decimal(19, 0))),
+             (cast('9999999999999999998' as decimal(19, 0)))) as t(v);
++-----------------------+
+| C                     |
++-----------------------+
+| 9999999999999999996.0 |
++-----------------------+
+(1 row)
+
+!ok
+
+# PERCENTILE_CONT / PERCENTILE_DISC on UNSIGNED values.
+select
+  percentile_cont(0.5) within group (order by v) as c,
+  percentile_disc(0.5) within group (order by v) as d
+from (values (cast(10 as int unsigned)),
+             (cast(20 as int unsigned))) as t(v);
++----+----+
+| C  | D  |
++----+----+
+| 15 | 10 |
++----+----+
 (1 row)
 
 !ok
@@ -4301,4 +4570,442 @@ GROUP BY GROUPING SETS ((deptno), ());
 
 !ok
 
+# [CALCITE-6104] Aggregate function that references outer column should be evaluated in outer query
+# Correlated aggregates are a non-standard extension.
+# They are rejected under DEFAULT conformance.
+!use scott
+
+SELECT (SELECT sum(sal) FROM dept) FROM emp;
+Aggregate function referencing outer column is not allowed under the current SQL conformance level
+!error
+
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT count(a) FROM xx LIMIT 1) AS ca
+FROM aa;
+Aggregate function referencing outer column is not allowed under the current SQL conformance level
+!error
+
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) FROM xx LIMIT 1) AS sa,
+  (SELECT count(a) FROM xx LIMIT 1) AS ca
+FROM aa;
+Aggregate function referencing outer column is not allowed under the current SQL conformance level
+!error
+
+# Allowed under LENIENT conformance.
+!use scott-lenient
+
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) FROM xx LIMIT 1) AS sa
+FROM aa;
++----+
+| SA |
++----+
+|  6 |
++----+
+(1 row)
+
+!ok
+
+# A non-numeric aggregate (MAX over a VARCHAR outer column) is also lifted to
+# the outer query. The CASE-based rewrite is type-agnostic, so the aggregate is
+# evaluated over the outer rows and produces a single row.
+SELECT (SELECT max(ename) FROM dept) AS m FROM emp;
++------+
+| M    |
++------+
+| WARD |
++------+
+(1 row)
+
+!ok
+
+# Inner table is empty: the scalar sub-query contributes NULL
+WITH aa (a) AS (VALUES 1, 2, 3),
+  empty_xx (x) AS (SELECT 1 FROM emp WHERE 1 = 0)
+SELECT (SELECT sum(a) FROM empty_xx LIMIT 1) AS sa
+FROM aa;
++----+
+| SA |
++----+
+|    |
++----+
+(1 row)
+
+!ok
+
+# Outer table is empty: the outer aggregate has no input rows
+WITH empty_aa (a) AS (SELECT 1 FROM emp WHERE 1 = 0),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) FROM xx LIMIT 1) AS sa
+FROM empty_aa;
++----+
+| SA |
++----+
+|    |
++----+
+(1 row)
+
+!ok
+
+# Aggregated column contains a mix of values and NULLs
+WITH aa (a) AS (VALUES 1, NULL, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) FROM xx LIMIT 1) AS sa
+FROM aa;
++----+
+| SA |
++----+
+|  4 |
++----+
+(1 row)
+
+!ok
+
+# Aggregate with no column references aggregates at the innermost level
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(1) FROM xx LIMIT 1) AS s
+FROM aa;
++---+
+| S |
++---+
+| 3 |
+| 3 |
+| 3 |
++---+
+(3 rows)
+
+!ok
+
+# Aggregate referencing only inner column aggregates at the inner level
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(x) FROM xx LIMIT 1) AS s
+FROM aa;
++----+
+| S  |
++----+
+| 60 |
+| 60 |
+| 60 |
++----+
+(3 rows)
+
+!ok
+
+# An expression over aggregates of different outer columns is lifted to the
+# outer query as a whole: sum(a) = 1+2+3 = 6, sum(b) = 10+20+30 = 60, so the
+# result is a single row 66.
+WITH aa (a, b) AS (VALUES (1, 10), (2, 20), (3, 30)),
+  xx (x) AS (VALUES 100, 200, 300)
+SELECT (SELECT sum(a) + sum(b) FROM xx LIMIT 1) AS s
+FROM aa;
++----+
+| S  |
++----+
+| 66 |
++----+
+(1 row)
+
+!ok
+
+# A single aggregate over an arithmetic expression of outer columns is also
+# lifted: sum(a + b) = (1+10) + (2+20) + (3+30) = 66.
+WITH aa (a, b) AS (VALUES (1, 10), (2, 20), (3, 30)),
+  xx (x) AS (VALUES 100, 200, 300)
+SELECT (SELECT sum(a + b) FROM xx LIMIT 1) AS s
+FROM aa;
++----+
+| S  |
++----+
+| 66 |
++----+
+(1 row)
+
+!ok
+
+# Lifted expression with an empty inner table: the guard sub-query yields no
+# row, so the whole expression is NULL.
+WITH aa (a, b) AS (VALUES (1, 10), (2, 20), (3, 30)),
+  empty_xx (x) AS (SELECT 1 FROM emp WHERE 1 = 0)
+SELECT (SELECT sum(a) + sum(b) FROM empty_xx LIMIT 1) AS s
+FROM aa;
++---+
+| S |
++---+
+|   |
++---+
+(1 row)
+
+!ok
+
+# Mixed case: the expression aggregates an outer column (a) and an inner
+# column (x). It references an inner column, so it is not lifted and keeps the
+# pre-existing correlated-sub-query behaviour (evaluated once per outer row).
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) + sum(x) FROM xx LIMIT 1) AS s
+FROM aa;
++----+
+| S  |
++----+
+| 63 |
+| 66 |
+| 69 |
++----+
+(3 rows)
+
+!ok
+
+# Two scalar sub-queries with outer-only aggregates are both lifted to the outer query
+WITH aa (a) AS (VALUES 1, 2, 3),
+  xx (x) AS (VALUES 10, 20, 30)
+SELECT (SELECT sum(a) FROM xx LIMIT 1) AS sa,
+  (SELECT count(a) FROM xx LIMIT 1) AS ca
+FROM aa;
++----+----+
+| SA | CA |
++----+----+
+|  6 |  3 |
++----+----+
+(1 row)
+
+!ok
+
+EnumerableCalc(expr#0..2=[{inputs}], expr#3=[IS NOT NULL($t2)], expr#4=[null:INTEGER], expr#5=[CASE($t3, $t0, $t4)], expr#6=[null:BIGINT], expr#7=[CASE($t3, $t1, $t6)], SA=[$t5], CA=[$t7])
+  EnumerableNestedLoopJoin(condition=[true], joinType=[left])
+    EnumerableAggregate(group=[{}], agg#0=[SUM($0)], agg#1=[COUNT()])
+      EnumerableValues(tuples=[[{ 1 }, { 2 }, { 3 }]])
+    EnumerableLimit(fetch=[1])
+      EnumerableValues(tuples=[[{ 1 }, { 1 }, { 1 }]])
+!plan
+
+SELECT (SELECT sum(sal) FROM dept) AS sum_sal
+FROM emp;
++----------+
+| SUM_SAL  |
++----------+
+| 29025.00 |
++----------+
+(1 row)
+
+!ok
+
+!use scott
+
+# [CALCITE-7647] Support SELECT * in GROUP BY ALL and ORDER BY ALL.
+# GROUP BY ALL expands SELECT * to every underlying column;
+# the star columns become grouping keys and the aggregate is excluded.
+select *, count(*) as c from (values (1, 'a'), (1, 'a'), (2, 'b')) as t(x, y)
+group by all
+order by x;
++---+---+---+
+| X | Y | C |
++---+---+---+
+| 1 | a | 2 |
+| 2 | b | 1 |
++---+---+---+
+(2 rows)
+
+!ok
+
+# [CALCITE-7647] GROUP BY ALL deduplicates a column that SELECT * and an
+# explicit reference both contribute to the grouping keys.
+select *, x from (values (1, 'a'), (1, 'a'), (2, 'b')) as t(x, y)
+group by all
+order by y;
++---+---+---+
+| X | Y | X |
++---+---+---+
+| 1 | a | 1 |
+| 2 | b | 2 |
++---+---+---+
+(2 rows)
+
+!ok
+
 # End agg.iq
+
+# [CALCITE-6537] Add syntax to allow non-aggregated rows to be used in GROUPING SETS
+# non-aggregated (detail) rows. Requires LENIENT conformance.
+
+!use scott-lenient
+
+# GROUPING SETS ((deptno), (*)): department totals (ename NULL) plus one
+# detail row per employee.
+select deptno, ename, sum(sal) as sumsal
+from emp
+group by grouping sets ((deptno), (*))
+order by deptno, ename nulls first;
++--------+--------+----------+
+| DEPTNO | ENAME  | SUMSAL   |
++--------+--------+----------+
+|     10 |        |  8750.00 |
+|     10 | CLARK  |  2450.00 |
+|     10 | KING   |  5000.00 |
+|     10 | MILLER |  1300.00 |
+|     20 |        | 10875.00 |
+|     20 | ADAMS  |  1100.00 |
+|     20 | FORD   |  3000.00 |
+|     20 | JONES  |  2975.00 |
+|     20 | SCOTT  |  3000.00 |
+|     20 | SMITH  |   800.00 |
+|     30 |        |  9400.00 |
+|     30 | ALLEN  |  1600.00 |
+|     30 | BLAKE  |  2850.00 |
+|     30 | JAMES  |   950.00 |
+|     30 | MARTIN |  1250.00 |
+|     30 | TURNER |  1500.00 |
+|     30 | WARD   |  1250.00 |
++--------+--------+----------+
+(17 rows)
+
+!ok
+
+# ROLLUP (deptno, *): detail rows, department totals and a grand total.
+select deptno, ename, sum(sal) as sumsal
+from emp
+group by rollup (deptno, *)
+order by deptno nulls last, ename nulls first;
++--------+--------+----------+
+| DEPTNO | ENAME  | SUMSAL   |
++--------+--------+----------+
+|     10 |        |  8750.00 |
+|     10 | CLARK  |  2450.00 |
+|     10 | KING   |  5000.00 |
+|     10 | MILLER |  1300.00 |
+|     20 |        | 10875.00 |
+|     20 | ADAMS  |  1100.00 |
+|     20 | FORD   |  3000.00 |
+|     20 | JONES  |  2975.00 |
+|     20 | SCOTT  |  3000.00 |
+|     20 | SMITH  |   800.00 |
+|     30 |        |  9400.00 |
+|     30 | ALLEN  |  1600.00 |
+|     30 | BLAKE  |  2850.00 |
+|     30 | JAMES  |   950.00 |
+|     30 | MARTIN |  1250.00 |
+|     30 | TURNER |  1500.00 |
+|     30 | WARD   |  1250.00 |
+|        |        | 29025.00 |
++--------+--------+----------+
+(18 rows)
+
+!ok
+
+# GROUPING distinguishes the detail set (ename grouped, g=0) from the
+# department set (ename not grouped, g=1).
+select g, count(*) as cnt
+from (
+  select grouping(ename) as g
+  from emp
+  group by grouping sets ((deptno), (*)))
+group by g
+order by g;
++---+-----+
+| G | CNT |
++---+-----+
+| 0 |  14 |
+| 1 |   3 |
++---+-----+
+(2 rows)
+
+!ok
+
+# "*" as a complete grouping set returns one detail row per employee.
+select deptno, ename, sum(sal) as sumsal
+from emp
+group by grouping sets (*)
+order by deptno, ename;
++--------+--------+---------+
+| DEPTNO | ENAME  | SUMSAL  |
++--------+--------+---------+
+|     10 | CLARK  | 2450.00 |
+|     10 | KING   | 5000.00 |
+|     10 | MILLER | 1300.00 |
+|     20 | ADAMS  | 1100.00 |
+|     20 | FORD   | 3000.00 |
+|     20 | JONES  | 2975.00 |
+|     20 | SCOTT  | 3000.00 |
+|     20 | SMITH  |  800.00 |
+|     30 | ALLEN  | 1600.00 |
+|     30 | BLAKE  | 2850.00 |
+|     30 | JAMES  |  950.00 |
+|     30 | MARTIN | 1250.00 |
+|     30 | TURNER | 1500.00 |
+|     30 | WARD   | 1250.00 |
++--------+--------+---------+
+(14 rows)
+
+!ok
+
+# "*" combined with the empty grouping set: detail rows, department
+# totals and a grand total.
+select deptno, ename, sum(sal) as sumsal
+from emp
+group by grouping sets ((deptno), (*), ())
+order by deptno nulls last, ename nulls first;
++--------+--------+----------+
+| DEPTNO | ENAME  | SUMSAL   |
++--------+--------+----------+
+|     10 |        |  8750.00 |
+|     10 | CLARK  |  2450.00 |
+|     10 | KING   |  5000.00 |
+|     10 | MILLER |  1300.00 |
+|     20 |        | 10875.00 |
+|     20 | ADAMS  |  1100.00 |
+|     20 | FORD   |  3000.00 |
+|     20 | JONES  |  2975.00 |
+|     20 | SCOTT  |  3000.00 |
+|     20 | SMITH  |   800.00 |
+|     30 |        |  9400.00 |
+|     30 | ALLEN  |  1600.00 |
+|     30 | BLAKE  |  2850.00 |
+|     30 | JAMES  |   950.00 |
+|     30 | MARTIN |  1250.00 |
+|     30 | TURNER |  1500.00 |
+|     30 | WARD   |  1250.00 |
+|        |        | 29025.00 |
++--------+--------+----------+
+(18 rows)
+
+!ok
+
+# "*" inside a tuple that is a ROLLUP argument: detail rows and a grand
+# total.
+select deptno, ename, sum(sal) as sumsal
+from emp
+group by rollup((deptno, *))
+order by deptno nulls last, ename nulls first;
++--------+--------+----------+
+| DEPTNO | ENAME  | SUMSAL   |
++--------+--------+----------+
+|     10 | CLARK  |  2450.00 |
+|     10 | KING   |  5000.00 |
+|     10 | MILLER |  1300.00 |
+|     20 | ADAMS  |  1100.00 |
+|     20 | FORD   |  3000.00 |
+|     20 | JONES  |  2975.00 |
+|     20 | SCOTT  |  3000.00 |
+|     20 | SMITH  |   800.00 |
+|     30 | ALLEN  |  1600.00 |
+|     30 | BLAKE  |  2850.00 |
+|     30 | JAMES  |   950.00 |
+|     30 | MARTIN |  1250.00 |
+|     30 | TURNER |  1500.00 |
+|     30 | WARD   |  1250.00 |
+|        |        | 29025.00 |
++--------+--------+----------+
+(15 rows)
+
+!ok
+
+# Under DEFAULT conformance, * in GROUPING SETS is a parse error;
+# see SqlValidatorTest.testGroupingSetsStarConformance.
+# Nested forms and restrictions are in
+# SqlValidatorTest.testGroupingSetsStarNested.
+!use post

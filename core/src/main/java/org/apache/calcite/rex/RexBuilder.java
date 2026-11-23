@@ -29,17 +29,21 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.type.RelDataTypeSystemImpl;
 import org.apache.calcite.runtime.FlatLists;
 import org.apache.calcite.runtime.SqlFunctions;
+import org.apache.calcite.sql.SqlAbstractDateTimeLiteral;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlCollation;
 import org.apache.calcite.sql.SqlIntervalQualifier;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlSpecialOperator;
+import org.apache.calcite.sql.SqlTimeLiteral;
+import org.apache.calcite.sql.SqlTimestampLiteral;
 import org.apache.calcite.sql.SqlUtil;
 import org.apache.calcite.sql.fun.SqlCountAggFunction;
 import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParserPos;
+import org.apache.calcite.sql.parser.SqlParserUtil;
 import org.apache.calcite.sql.type.ArraySqlType;
 import org.apache.calcite.sql.type.IntervalSqlType;
 import org.apache.calcite.sql.type.MapSqlType;
@@ -56,6 +60,7 @@ import org.apache.calcite.util.TimeWithTimeZoneString;
 import org.apache.calcite.util.TimestampString;
 import org.apache.calcite.util.TimestampWithTimeZoneString;
 import org.apache.calcite.util.Util;
+import org.apache.calcite.util.UuidValue;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableRangeSet;
@@ -805,6 +810,12 @@ public class RexBuilder {
           && SqlTypeUtil.isExactNumeric(type)) {
         return makeCastBooleanToExact(type, exp);
       }
+      final RexNode literalCast =
+          makeCastForTemporalLiteral(
+              pos, type, literal, matchNullability, safe, format);
+      if (literalCast != null) {
+        return literalCast;
+      }
       if (canRemoveCastFromLiteral(type, value, typeName)) {
         switch (typeName) {
         case INTERVAL_YEAR:
@@ -864,9 +875,6 @@ public class RexBuilder {
         }
         return literal2;
       }
-    } else if (SqlTypeUtil.isExactNumeric(type)
-        && SqlTypeUtil.isInterval(exp.getType())) {
-      return makeCastIntervalToExact(pos, type, exp);
     } else if (sqlType == SqlTypeName.BOOLEAN
         && SqlTypeUtil.isExactNumeric(exp.getType())) {
       return makeCastExactToBoolean(type, exp);
@@ -875,6 +883,123 @@ public class RexBuilder {
       return makeCastBooleanToExact(type, exp);
     }
     return makeAbstractCast(pos, type, exp, safe, format);
+  }
+
+  private @Nullable RexNode makeCastForTemporalLiteral(
+      SqlParserPos pos,
+      RelDataType type,
+      RexLiteral literal,
+      boolean matchNullability,
+      boolean safe,
+      RexLiteral format) {
+    if (!format.isNull()) {
+      return null;
+    }
+    if (SqlTypeUtil.isCharacter(literal.getType())) {
+      return makeCastFromCharacterLiteralToTemporal(
+          pos, type, literal, matchNullability, safe, format);
+    }
+    if (SqlTypeUtil.isCharacter(type)) {
+      return makeCharacterLiteralFromTemporalLiteral(type, literal);
+    }
+    return null;
+  }
+
+  private @Nullable RexNode makeCastFromCharacterLiteralToTemporal(
+      SqlParserPos pos,
+      RelDataType type,
+      RexLiteral literal,
+      boolean matchNullability,
+      boolean safe,
+      RexLiteral format) {
+    final NlsString nlsString = literal.getValueAs(NlsString.class);
+    if (nlsString == null) {
+      return null;
+    }
+    final String value = nlsString.getValue().trim();
+    final RexNode temporalLiteral;
+    try {
+      switch (type.getSqlTypeName()) {
+      case TIME:
+        final SqlTimeLiteral timeLiteral =
+            SqlParserUtil.parseTimeLiteral(value, pos);
+        if (!isExactFractionalSecondLiteral(timeLiteral, value)) {
+          return null;
+        }
+        final TimeString time =
+            requireNonNull(timeLiteral.getValueAs(TimeString.class),
+                "timeLiteral.getValueAs(TimeString.class)");
+        temporalLiteral = makeTimeLiteral(time, type.getPrecision());
+        break;
+      case TIMESTAMP:
+        final SqlTimestampLiteral timestampLiteral =
+            SqlParserUtil.parseTimestampLiteral(value, pos);
+        if (!isExactFractionalSecondLiteral(timestampLiteral, value)) {
+          return null;
+        }
+        final TimestampString timestamp =
+            requireNonNull(timestampLiteral.getValueAs(TimestampString.class),
+                "timestampLiteral.getValueAs(TimestampString.class)");
+        temporalLiteral = makeTimestampLiteral(timestamp, type.getPrecision());
+        break;
+      default:
+        return null;
+      }
+    } catch (RuntimeException e) {
+      return safe ? makeNullLiteral(type) : null;
+    }
+    if (type.isNullable()
+        && !temporalLiteral.getType().isNullable()
+        && matchNullability) {
+      return makeAbstractCast(pos, type, temporalLiteral, safe, format);
+    }
+    return temporalLiteral;
+  }
+
+  /** Converts a TIME or TIMESTAMP literal to a character literal.
+   *
+   * <p>Returns null if the literal is not a TIME or TIMESTAMP, the literal
+   * cannot be read as the corresponding temporal string value, or the formatted
+   * temporal value does not fit in the target character type. */
+  private @Nullable RexNode makeCharacterLiteralFromTemporalLiteral(
+      RelDataType type,
+      RexLiteral literal) {
+    // Format temporal literals directly so they do not go through generated
+    // code, whose TIME/TIMESTAMP runtime values have millisecond precision.
+    final String value;
+    final int precision = literal.getType().getPrecision();
+    switch (literal.getType().getSqlTypeName()) {
+    case TIME:
+      final TimeString time = literal.getValueAs(TimeString.class);
+      if (time == null) {
+        return null;
+      }
+      value = time.toString(precision);
+      break;
+    case TIMESTAMP:
+      final TimestampString timestamp = literal.getValueAs(TimestampString.class);
+      if (timestamp == null) {
+        return null;
+      }
+      value = timestamp.toString(precision);
+      break;
+    default:
+      return null;
+    }
+    // Only create a character literal if the formatted temporal value fits in
+    // the target type.
+    return SqlTypeUtil.comparePrecision(type.getPrecision(), value.length()) >= 0
+        ? makeLiteral(value, type, true)
+        : null;
+  }
+
+  /** Returns whether a parsed TIME or TIMESTAMP literal has fractional-second
+   * precision high enough to preserve the original character value exactly. */
+  private static boolean isExactFractionalSecondLiteral(
+      SqlAbstractDateTimeLiteral literal, String value) {
+    return literal.getPrec() != 0
+        && literal.getPrec() != RelDataType.PRECISION_NOT_SPECIFIED
+        && literal.toFormattedString().equals(value);
   }
 
   /** Returns the lowest granularity unit for the given unit.
@@ -998,16 +1123,6 @@ public class RexBuilder {
             casted, makeNullLiteral(toType)));
   }
 
-  private RexNode makeCastIntervalToExact(SqlParserPos pos, RelDataType toType, RexNode exp) {
-    final TimeUnit endUnit = exp.getType().getSqlTypeName().getEndUnit();
-    final TimeUnit baseUnit = baseUnit(exp.getType().getSqlTypeName());
-    final BigDecimal multiplier = baseUnit.multiplier;
-    final BigDecimal divider = endUnit.multiplier;
-    RexNode value =
-        multiplyDivide(pos, decodeIntervalOrDecimal(pos, exp), multiplier, divider);
-    return ensureType(pos, toType, value, false);
-  }
-
   public RexNode multiplyDivide(RexNode e, BigDecimal multiplier,
       BigDecimal divider) {
     return multiplyDivide(SqlParserPos.ZERO, e, multiplier, divider);
@@ -1050,7 +1165,10 @@ public class RexBuilder {
    *                      arithmetic, but is often required for rounding and
    *                      explicit casts.
    * @return the integer reinterpreted as an opaque decimal type
+   *
+   * @deprecated The REINTERPRET operator is deprecated
    */
+  @Deprecated // to be removed before 2.0
   public RexNode encodeIntervalOrDecimal(
       RexNode value,
       RelDataType type,
@@ -1058,6 +1176,11 @@ public class RexBuilder {
     return encodeIntervalOrDecimal(SqlParserPos.ZERO, value, type, checkOverflow);
   }
 
+  /** Encodes an interval or decimal, with an explicit parser position.
+   *
+   * @deprecated The REINTERPRET operator is deprecated
+   */
+  @Deprecated // to be removed before 2.0
   public RexNode encodeIntervalOrDecimal(
       SqlParserPos pos,
       RexNode value,
@@ -1074,11 +1197,19 @@ public class RexBuilder {
    *
    * @param node the interval or decimal value as an opaque type
    * @return an integer representation of the decimal value
+   *
+   * @deprecated The REINTERPRET operator is deprecated
    */
+  @Deprecated // to be removed before 2.0
   public RexNode decodeIntervalOrDecimal(RexNode node) {
     return decodeIntervalOrDecimal(SqlParserPos.ZERO, node);
   }
 
+  /** Decodes an interval or decimal, with an explicit parser position.
+   *
+   * @deprecated The REINTERPRET operator is deprecated
+   */
+  @Deprecated // to be removed before 2.0
   public RexNode decodeIntervalOrDecimal(SqlParserPos pos, RexNode node) {
     assert SqlTypeUtil.isDecimal(node.getType())
         || SqlTypeUtil.isInterval(node.getType());
@@ -1162,7 +1293,13 @@ public class RexBuilder {
    * @param exp           expression to be casted
    * @param checkOverflow whether an overflow check is required
    * @return a RexCall with two operands and a special return type
+   *
+   * @deprecated The REINTERPRET operator is deprecated; its semantics depend
+   * on the physical representation of values, which only an adapter or
+   * calling convention knows. Use {@link #makeCast(RelDataType, RexNode)}
+   * instead
    */
+  @Deprecated // to be removed before 2.0
   public RexNode makeReinterpretCast(
       RelDataType type,
       RexNode exp,
@@ -1178,7 +1315,13 @@ public class RexBuilder {
    * @param exp           expression to be cast
    * @param checkOverflow whether an overflow check is required
    * @return a RexCall with two operands and a special return type
+   *
+   * @deprecated The REINTERPRET operator is deprecated; its semantics depend
+   * on the physical representation of values, which only an adapter or
+   * calling convention knows. Use
+   * {@link #makeCast(SqlParserPos, RelDataType, RexNode)} instead
    */
+  @Deprecated // to be removed before 2.0
   public RexNode makeReinterpretCast(
       SqlParserPos pos,
       RelDataType type,
@@ -1407,8 +1550,21 @@ public class RexBuilder {
       } else if (type.getScale() != RelDataType.SCALE_NOT_SPECIFIED) {
         o = ((BigDecimal) o).setScale(type.getScale(), typeFactory.getTypeSystem().roundingMode());
         if (type.getScale() < 0) {
+          if (!SqlUtil.isBoundedDecimal((BigDecimal) o)) {
+            throw new IllegalArgumentException("Cannot convert " + o + " to " + type
+                + ": plain-notation expansion exceeds the configured bound");
+          }
           o = new BigDecimal(((BigDecimal) o).toPlainString());
         }
+      }
+      break;
+    case DOUBLE:
+    case FLOAT:
+    case REAL:
+      if (o != null && type.getSqlTypeName() == SqlTypeName.REAL) {
+        // SQL REAL is the same as Java Float
+        // SQL FLOAT and DOUBLE ad the same as Java Double
+        o = (double) ((Number) o).floatValue();
       }
       break;
     default:
@@ -1430,7 +1586,12 @@ public class RexBuilder {
   }
 
   public RexLiteral makeUuidLiteral(@Nullable UUID uuid) {
-    return new RexLiteral(uuid, typeFactory.createSqlType(SqlTypeName.UUID), SqlTypeName.UUID);
+    UuidValue uuidValue = (uuid != null) ? new UuidValue(uuid) : null;
+    return new RexLiteral(uuidValue, typeFactory.createSqlType(SqlTypeName.UUID), SqlTypeName.UUID);
+  }
+
+  public RexLiteral makeUuidLiteral(@Nullable UuidValue uuidValue) {
+    return new RexLiteral(uuidValue, typeFactory.createSqlType(SqlTypeName.UUID), SqlTypeName.UUID);
   }
 
   /**
@@ -2228,7 +2389,11 @@ public class RexBuilder {
     case ANY:
       return makeLiteral(value, guessType(value), allowCast);
     case UUID:
-      return makeUuidLiteral((UUID) value);
+      if (value instanceof UUID) {
+        return makeUuidLiteral((UUID) value);
+      } else {
+        return makeUuidLiteral((UuidValue) value);
+      }
     default:
       throw new IllegalArgumentException(
           "Cannot create literal for type '" + sqlTypeName + "'");

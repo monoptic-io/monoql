@@ -40,6 +40,7 @@ import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.core.Union;
 import org.apache.calcite.rel.core.Values;
+import org.apache.calcite.rel.core.Window;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
@@ -139,8 +140,6 @@ public class RelMdPredicates
     implements MetadataHandler<BuiltInMetadata.Predicates> {
   public static final RelMetadataProvider SOURCE = ReflectiveRelMetadataProvider
       .reflectiveSource(new RelMdPredicates(), BuiltInMetadata.Predicates.Handler.class);
-
-  private static final List<RexNode> EMPTY_LIST = ImmutableList.of();
 
   @Override public MetadataDef<BuiltInMetadata.Predicates> getDef() {
     return BuiltInMetadata.Predicates.DEF;
@@ -551,6 +550,19 @@ public class RelMdPredicates
   }
 
   /**
+   * Infers predicates for a Window.
+   */
+  public RelOptPredicateList getPredicates(Window window, RelMetadataQuery mq) {
+    // A Window preserves its input fields and appends its aggregate results,
+    // so predicates on the input fields remain valid without remapping.
+    final RelOptPredicateList inputPredicates =
+        mq.getPulledUpPredicates(window.getInput());
+    // Inferred predicates belong to an input Join, not to the Window.
+    return RelOptPredicateList.of(window.getCluster().getRexBuilder(),
+        inputPredicates.pulledUpPredicates);
+  }
+
+  /**
    * Infers predicates for a TableModify.
    */
   public RelOptPredicateList getPredicates(TableModify tableModify, RelMetadataQuery mq) {
@@ -878,7 +890,7 @@ public class RelMdPredicates
       case RIGHT:
         return RelOptPredicateList.of(rexBuilder,
             RelOptUtil.conjunctions(rightChildPredicates),
-            inferredPredicates, EMPTY_LIST);
+            leftInferredPredicates, rightInferredPredicates);
       default:
         assert inferredPredicates.isEmpty();
         return RelOptPredicateList.EMPTY;

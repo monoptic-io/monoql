@@ -20,16 +20,19 @@ import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelRule;
 import org.apache.calcite.plan.RelTraitSet;
+import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Calc;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.hint.RelHint;
 import org.apache.calcite.rel.logical.LogicalCalc;
+import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.logical.LogicalWindow;
 import org.apache.calcite.rex.RexBiVisitorImpl;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexFieldAccess;
+import org.apache.calcite.rex.RexLambda;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexLocalRef;
 import org.apache.calcite.rex.RexNode;
@@ -52,6 +55,7 @@ import org.immutables.value.Value;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
@@ -193,7 +197,7 @@ public abstract class ProjectToWindowRule
       ProjectToLogicalProjectAndWindowRuleConfig DEFAULT =
           ImmutableProjectToLogicalProjectAndWindowRuleConfig.of()
               .withOperandSupplier(b ->
-                  b.operand(Project.class)
+                  b.operand(LogicalProject.class)
                       .predicate(Project::containsOver)
                       .anyInputs())
               .withDescription("ProjectToWindowRule:project");
@@ -253,6 +257,10 @@ public abstract class ProjectToWindowRule
             return call instanceof RexOver;
           }
 
+          @Override protected boolean canImplement(RexLambda lambda) {
+            return false;
+          }
+
           @Override protected boolean supportsCondition() {
             return false;
           }
@@ -261,6 +269,7 @@ public abstract class ProjectToWindowRule
               RelBuilder relBuilder, RelNode input, RexProgram program, List<RelHint> hints) {
             checkArgument(program.getCondition() == null,
                 "WindowedAggregateRel cannot accept a condition");
+            traitSet = traitSet.replaceIfs(RelCollationTraitDef.INSTANCE, Collections::emptyList);
             return LogicalWindow.create(cluster, traitSet, relBuilder, input,
                 program, hints);
           }

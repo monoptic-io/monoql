@@ -18,11 +18,17 @@ package org.apache.calcite.test;
 
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
 import org.apache.calcite.adapter.java.ReflectiveSchema;
+import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.config.Lex;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.prepare.Prepare;
 import org.apache.calcite.runtime.Hook;
+import org.apache.calcite.schema.Schema;
+import org.apache.calcite.schema.SchemaFactory;
+import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.dialect.MysqlSqlDialect;
 import org.apache.calcite.test.CalciteAssert.AssertThat;
 import org.apache.calcite.test.CalciteAssert.DatabaseInstance;
 import org.apache.calcite.test.schemata.foodmart.FoodmartSchema;
@@ -40,6 +46,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -47,7 +54,9 @@ import java.util.function.Consumer;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.stringContainsInOrder;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
@@ -78,6 +87,25 @@ class JdbcAdapterTest {
             || CalciteAssert.DB == DatabaseInstance.POSTGRESQL)
         .planHasSql(jdbcSql)
         .returnsCount(14);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7838">[CALCITE-7838]
+   * HsqldbSqlDialect incorrectly claims to support nested aggregations</a>.
+   *
+   * <p>Runs against a real HSQLDB, which rejects
+   * {@code SELECT SUM(CAST(SUM(x) AS DOUBLE)) ... GROUP BY y}. */
+  @Test void testNestedAggregateUnderCast() {
+    CalciteAssert.model(JdbcTest.FOODMART_SCOTT_MODEL)
+        .query("select sum(m) from (\n"
+            + "  select cast(sum(sal) as double) as m\n"
+            + "  from scott.emp group by deptno)")
+        .enable(CalciteAssert.DB == CalciteAssert.DatabaseInstance.HSQLDB)
+        .planHasSql("SELECT SUM(\"M\")\n"
+            + "FROM (SELECT CAST(SUM(\"SAL\") AS DOUBLE) AS \"M\"\n"
+            + "FROM \"SCOTT\".\"EMP\"\n"
+            + "GROUP BY \"DEPTNO\") AS \"t0\"")
+        .returns("EXPR$0=29025.0\n");
   }
 
   /** Test case for
@@ -300,24 +328,86 @@ class JdbcAdapterTest {
             + "WHERE \"t0\".\"i\" IS NULL AND \"t\".\"ck\" >= \"t\".\"c\" OR \"t\".\"c\" = 0");
   }
 
-  @Test void testNotPushDownNotIn() {
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6401">[CALCITE-6401]
+   * JdbcAdapter cannot push down NOT IN sub-queries</a>. */
+  @Test void testPushDownNotInMultiColumn() {
     CalciteAssert.model(JdbcTest.SCOTT_MODEL)
         .query("select * from dept where (deptno, dname) not in (select deptno, ename from emp)")
-        .explainContains("EnumerableNestedLoopJoin(condition=[AND(OR(IS NULL($5),"
-            + " =($0, $5)), OR(IS NULL($6), =($1, $6)))], joinType=[left])\n"
-            + "    EnumerableNestedLoopJoin(condition=[true], joinType=[inner])\n"
-            + "      JdbcToEnumerableConverter\n"
-            + "        JdbcTableScan(table=[[SCOTT, DEPT]])\n"
-            + "      EnumerableAggregate(group=[{}], c=[COUNT()], ck=[COUNT() FILTER $0])\n"
-            + "        JdbcToEnumerableConverter\n"
-            + "          JdbcProject($f2=[OR(IS NOT NULL($7), IS NOT NULL($1))])\n"
-            + "            JdbcTableScan(table=[[SCOTT, EMP]])\n"
-            + "    JdbcToEnumerableConverter\n"
-            + "      JdbcAggregate(group=[{0, 1}], i=[LITERAL_AGG(true)], em=[MAX($2)])\n"
-            + "        JdbcProject(DEPTNO=[$7], ENAME=[CAST($1):VARCHAR(14)],"
-            + " $f2=[AND(IS NOT NULL($7), IS NOT NULL($1))])\n"
-            + "          JdbcFilter(condition=[OR(IS NOT NULL($7), IS NOT NULL($1))])\n"
-            + "            JdbcTableScan(table=[[SCOTT, EMP]])\n\n");
+        .explainContains("PLAN=JdbcToEnumerableConverter\n"
+            + "  JdbcProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
+            + "    JdbcFilter(condition=[OR(=($3, 0), AND(IS NULL($7), >=($4, $3), IS NOT NULL($1)))])\n"
+            + "      JdbcJoin(condition=[AND(OR(IS NULL($5), =($0, $5)), OR(IS NULL($6), =($1, $6)))], joinType=[left])\n"
+            + "        JdbcJoin(condition=[true], joinType=[inner])\n"
+            + "          JdbcTableScan(table=[[SCOTT, DEPT]])\n"
+            + "          JdbcAggregate(group=[{}], c=[COUNT()], ck=[COUNT() FILTER $0])\n"
+            + "            JdbcProject($f2=[OR(IS NOT NULL($7), IS NOT NULL($1))])\n"
+            + "              JdbcTableScan(table=[[SCOTT, EMP]])\n"
+            + "        JdbcAggregate(group=[{0, 1}], i=[LITERAL_AGG(true)])\n"
+            + "          JdbcProject(DEPTNO=[$7], ENAME=[CAST($1):VARCHAR(14)])\n"
+            + "            JdbcFilter(condition=[OR(IS NOT NULL($7), IS NOT NULL($1))])\n"
+            + "              JdbcTableScan(table=[[SCOTT, EMP]])\n\n");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7124">[CALCITE-7124]
+   * JdbcAggregateRule should push aggregate functions FILTER clauses to
+   * underlying SQL via JDBC adapter</a>.
+   *
+   * <p>Tests that an aggregate with a FILTER clause is pushed down to the
+   * underlying SQL, and that a dialect without FILTER support (HSQLDB)
+   * receives an equivalent CASE expression. */
+  @Test void testAggregateFilterPushDown() {
+    CalciteAssert.model(JdbcTest.SCOTT_MODEL)
+        .query("select sum(sal) filter (where deptno = 10) as s from emp")
+        .explainContains("JdbcAggregate(group=[{}], S=[SUM($0) FILTER $1])")
+        .runs()
+        .enable(CalciteAssert.DB == CalciteAssert.DatabaseInstance.HSQLDB)
+        .planHasSql("SELECT SUM(CASE WHEN CAST(\"DEPTNO\" AS INTEGER) = 10 IS TRUE THEN \"SAL\" "
+            + "ELSE NULL END) AS \"S\"\n"
+            + "FROM \"SCOTT\".\"EMP\"")
+        .returnsUnordered("S=8750.00");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7124">[CALCITE-7124]
+   * JdbcAggregateRule should push aggregate functions FILTER clauses to
+   * underlying SQL via JDBC adapter</a>.
+   *
+   * <p>Tests that COUNT(*) with a FILTER clause is pushed down as
+   * COUNT(CASE ...) to a dialect without FILTER support (HSQLDB). */
+  @Test void testAggregateCountFilterPushDownGrouped() {
+    CalciteAssert.model(JdbcTest.SCOTT_MODEL)
+        .query("select deptno, count(*) filter (where sal > 1000) as c from emp"
+            + " group by deptno")
+        .explainContains("JdbcAggregate(group=[{0}], C=[COUNT() FILTER $1])")
+        .runs()
+        .enable(CalciteAssert.DB == CalciteAssert.DatabaseInstance.HSQLDB)
+        .planHasSql("SELECT \"DEPTNO\", COUNT(CASE WHEN CAST(\"SAL\" AS DECIMAL(12, 2)) > 1000.00 "
+            + "IS TRUE THEN 1 ELSE NULL END) AS \"C\"\n"
+            + "FROM \"SCOTT\".\"EMP\"\n"
+            + "GROUP BY \"DEPTNO\"")
+        .returnsUnordered("DEPTNO=10; C=3", "DEPTNO=20; C=4", "DEPTNO=30; C=5");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7124">[CALCITE-7124]
+   * JdbcAggregateRule should push aggregate functions FILTER clauses to
+   * underlying SQL via JDBC adapter</a>.
+   *
+   * <p>Tests that an aggregate with a DISTINCT keyword and a FILTER clause
+   * is pushed down, and that the DISTINCT keyword is preserved in the
+   * generated SQL. */
+  @Test void testAggregateDistinctFilterPushDown() {
+    CalciteAssert.model(JdbcTest.SCOTT_MODEL)
+        .query("select count(distinct deptno) filter (where sal > 1000) as c from emp")
+        .explainContains("JdbcAggregate(group=[{}], C=[COUNT(DISTINCT $0) FILTER $1])")
+        .runs()
+        .enable(CalciteAssert.DB == CalciteAssert.DatabaseInstance.HSQLDB)
+        .planHasSql("SELECT COUNT(DISTINCT CASE WHEN CAST(\"SAL\" AS DECIMAL(12, 2)) > 1000.00 "
+            + "IS TRUE THEN \"DEPTNO\" ELSE NULL END) AS \"C\"\n"
+            + "FROM \"SCOTT\".\"EMP\"")
+        .returnsUnordered("C=3");
   }
 
   /** Test case for
@@ -1456,21 +1546,21 @@ class JdbcAdapterTest {
         + "  JdbcTableModify(table=[[foodmart, expense_fact]], operation=[MERGE],"
         + " updateColumnList=[[amount]], flattened=[false])\n"
         + "    JdbcProject(STORE_ID=[$0], $f1=[666], $f2=[1997-01-01 00:00:00], $f3=[666],"
-        + " $f4=['666':VARCHAR(30)], $f5=[666], AMOUNT=[CAST($1):DECIMAL(10, 4) NOT NULL],"
+        + " $f4=['666':VARCHAR(30)], $f5=[666], AMOUNT=[$1],"
         + " store_id=[$2],"
         + " account_id=[$3], exp_date=[$4], time_id=[$5], category_id=[$6], currency_id=[$7],"
-        + " amount=[$8], AMOUNT0=[CAST($1):DECIMAL(10, 4) NOT NULL])\n"
+        + " amount=[$8], AMOUNT0=[$1])\n"
         + "      JdbcJoin(condition=[=($2, $0)], joinType=[left])\n"
         + "        JdbcValues(tuples=[[{ 666, 42 }]])\n"
         + "        JdbcTableScan(table=[[foodmart, expense_fact]])\n";
     final String jdbcSql = "MERGE INTO \"foodmart\".\"expense_fact\"\n"
         + "USING (VALUES (666, 42)) AS \"t\" (\"STORE_ID\", \"AMOUNT\")\n"
         + "ON \"t\".\"STORE_ID\" = \"expense_fact\".\"store_id\"\n"
-        + "WHEN MATCHED THEN UPDATE SET \"amount\" = CAST(\"t\".\"AMOUNT\" AS DECIMAL(10, 4))\n"
+        + "WHEN MATCHED THEN UPDATE SET \"amount\" = \"t\".\"AMOUNT\"\n"
         + "WHEN NOT MATCHED THEN INSERT (\"store_id\", \"account_id\", \"exp_date\", \"time_id\", "
         + "\"category_id\", \"currency_id\", \"amount\") VALUES \"t\".\"STORE_ID\",\n"
         + "666,\nTIMESTAMP '1997-01-01 00:00:00',\n666,\n'666',\n666,\n"
-        + "CAST(\"t\".\"AMOUNT\" AS DECIMAL(10, 4))";
+        + "\"t\".\"AMOUNT\"";
     final AssertThat that =
         CalciteAssert.model(FoodmartSchema.FOODMART_MODEL)
             .enable(CalciteAssert.DB == DatabaseInstance.HSQLDB);
@@ -1694,6 +1784,99 @@ class JdbcAdapterTest {
 
     rs.close();
     calciteConnection.close();
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7616">[CALCITE-7616]
+   * ProjectToLogicalProjectAndWindowRule should not match non-logical Project
+   * nodes with JDBC convention</a>.
+   *
+   * <p>When a JDBC schema's dialect supports window functions (e.g. MySQL),
+   * a query with window functions (RANK, ROW_NUMBER, etc.) should not throw
+   * AssertionError because {@code ProjectToLogicalProjectAndWindowRule}
+   * fires on {@code JdbcProject} and creates {@code LogicalWindow} with
+   * JDBC convention.
+   *
+   * <p>Uses an in-memory HSQLDB database with a custom schema factory
+   * ({@link WindowSupportingJdbcSchemaFactory}) that wraps the HSQLDB
+   * connection with MySQL dialect. HSQLDB's own dialect reports
+   * {@code supportsWindowFunctions() = false}, so MySQL dialect (which
+   * reports {@code true}) is needed to trigger
+   * {@code JdbcProjectRule} to convert projects containing OVER expressions
+   * into {@code JdbcProject} nodes. */
+  @Test void testWindowFunctionJdbcConvention() throws Exception {
+    final String jdbcUrl = "jdbc:hsqldb:mem:jdbcwindowconventiontest";
+    try (Connection conn = DriverManager.getConnection(jdbcUrl, "SA", "")) {
+      try (Statement stmt = conn.createStatement()) {
+        stmt.execute("CREATE TABLE emp ("
+            + "empno INT, "
+            + "sal DECIMAL(10,2)"
+            + ")");
+        stmt.execute("INSERT INTO emp VALUES "
+            + "(1, 100.00), "
+            + "(2, 200.00), "
+            + "(3, 300.00)");
+      }
+    }
+
+    final String model = "{\n"
+        + "  version: '1.0',\n"
+        + "  defaultSchema: 'TEST',\n"
+        + "  schemas: [{\n"
+        + "    type: 'custom',\n"
+        + "    name: 'TEST',\n"
+        + "    factory: '" + WindowSupportingJdbcSchemaFactory.class.getName() + "',\n"
+        + "    operand: {\n"
+        + "      jdbcUrl: '" + jdbcUrl + "',\n"
+        + "      jdbcDriver: 'org.hsqldb.jdbcDriver',\n"
+        + "      jdbcUser: 'SA',\n"
+        + "      jdbcPassword: ''\n"
+        + "    }\n"
+        + "  }]\n"
+        + "}";
+
+    final String sql = "SELECT empno, RANK() OVER (ORDER BY sal DESC) AS rnk\n"
+        + "FROM emp";
+
+    try {
+      CalciteAssert.model(model)
+          .query(sql)
+          .runs();
+    } catch (Exception e) {
+      // After fix, the convention AssertionError should NOT occur.
+      // The query may fail because HSQLDB does not support RANK(), but
+      // that is a runtime SQL error, not a planner convention error.
+      assertThat(e.getMessage(),
+          not(stringContainsInOrder("calling-convention")));
+    }
+  }
+
+  /** Custom JDBC schema factory wrapping HSQLDB with MySQL dialect.
+   *
+   * <p>HSQLDB's dialect reports {@code supportsWindowFunctions() = false},
+   * so MySQL dialect is used to trigger the JdbcProjectRule path that
+   * exercises CALCITE-7616. */
+  public static class WindowSupportingJdbcSchemaFactory
+      implements SchemaFactory {
+
+    @Override public Schema create(SchemaPlus parentSchema, String name,
+        Map<String, Object> operand) {
+      final String jdbcUrl = (String) operand.get("jdbcUrl");
+      final String jdbcDriver = (String) operand.get("jdbcDriver");
+      final String jdbcUser = (String) operand.get("jdbcUser");
+      final String jdbcPassword = (String) operand.get("jdbcPassword");
+
+      final javax.sql.DataSource dataSource =
+          JdbcSchema.dataSource(jdbcUrl, jdbcDriver, jdbcUser, jdbcPassword);
+
+      final SqlDialect dialect =
+          new MysqlSqlDialect(
+              SqlDialect.EMPTY_CONTEXT
+                  .withDatabaseProduct(SqlDialect.DatabaseProduct.MYSQL));
+
+      return JdbcSchema.create(parentSchema, name, dataSource,
+          databaseMetaData -> dialect, null, null);
+    }
   }
 
   /** Acquires a lock, and releases it when closed. */

@@ -30,7 +30,6 @@ import org.apache.calcite.rel.logical.LogicalSort;
 import org.apache.calcite.rel.metadata.RelMdUtil;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rex.RexBuilder;
-import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.tools.RelBuilderFactory;
@@ -105,9 +104,9 @@ public class SortJoinTransposeRule
     final Sort sort = call.rel(0);
     final Join join = call.rel(1);
 
-    // Do nothing if SORT contains dynamic parameters in offset or fetch
-    if (sort.offset instanceof RexDynamicParam
-        || sort.fetch instanceof RexDynamicParam) {
+    // The pushed fetch is calculated from literal offset and fetch values.
+    if ((sort.offset != null && !(sort.offset instanceof RexLiteral))
+        || (sort.fetch != null && !(sort.fetch instanceof RexLiteral))) {
       return false;
     }
 

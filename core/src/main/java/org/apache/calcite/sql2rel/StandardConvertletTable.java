@@ -93,6 +93,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
@@ -830,36 +831,44 @@ public class StandardConvertletTable extends ReflectiveConvertletTable {
   protected RexNode convertFloorCeil(SqlRexContext cx, SqlCall call) {
     final boolean floor = call.getKind() == SqlKind.FLOOR;
     final SqlParserPos pos = call.getParserPosition();
-    // Rewrite floor, ceil of interval
-    if (call.operandCount() == 1
-        && call.operand(0) instanceof SqlIntervalLiteral) {
-      final SqlIntervalLiteral literal = call.operand(0);
-      SqlIntervalLiteral.IntervalValue interval =
-          literal.getValueAs(SqlIntervalLiteral.IntervalValue.class);
-      BigDecimal val =
-          interval.getIntervalQualifier().getStartUnit().multiplier;
-      RexNode rexInterval = cx.convertExpression(literal);
-
+    // Rewrite floor, ceil of an interval as arithmetic that rounds to a
+    // multiple of the interval's leading unit.
+    if (call.operandCount() == 1) {
       final RexBuilder rexBuilder = cx.getRexBuilder();
-      RexNode zero = rexBuilder.makeExactLiteral(BigDecimal.valueOf(0));
-      RexNode cond = ge(pos, rexBuilder, rexInterval, zero);
+      final RexNode rexInterval = cx.convertExpression(call.operand(0));
+      final SqlIntervalQualifier qualifier =
+          rexInterval.getType().getIntervalQualifier();
+      if (qualifier != null) {
+        if (qualifier.timeFrameName != null) {
+          throw new UnsupportedOperationException((floor ? "FLOOR" : "CEIL")
+              + " of an interval with custom time frame '"
+              + qualifier.timeFrameName + "' is not supported");
+        }
+        if (!RexUtil.isDeterministic(rexInterval)) {
+          throw new UnsupportedOperationException((floor ? "FLOOR" : "CEIL")
+              + " of a non-deterministic interval expression is not"
+              + " supported");
+        }
+        BigDecimal val = qualifier.getStartUnit().multiplier;
+        RexNode zero = rexBuilder.makeExactLiteral(BigDecimal.valueOf(0));
+        RexNode cond = ge(pos, rexBuilder, rexInterval, zero);
 
-      RexNode pad =
-          rexBuilder.makeExactLiteral(val.subtract(BigDecimal.ONE));
-      RexNode cast =
-          rexBuilder.makeReinterpretCast(pos, rexInterval.getType(), pad,
-              rexBuilder.makeLiteral(false));
-      RexNode sum =
-          floor ? minus(pos, rexBuilder, rexInterval, cast)
-              : plus(pos, rexBuilder, rexInterval, cast);
+        RexNode pad =
+            rexBuilder.makeIntervalLiteral(val.subtract(BigDecimal.ONE),
+                qualifier);
+        RexNode sum =
+            floor ? minus(pos, rexBuilder, rexInterval, pad)
+                : plus(pos, rexBuilder, rexInterval, pad);
 
-      RexNode kase = floor
-          ? case_(rexBuilder, rexInterval, cond, sum)
-          : case_(rexBuilder, sum, cond, rexInterval);
+        // CASE operands are (when, then, else)
+        RexNode kase = floor
+            ? case_(rexBuilder, cond, rexInterval, sum)
+            : case_(rexBuilder, cond, sum, rexInterval);
 
-      RexNode factor = rexBuilder.makeExactLiteral(val);
-      RexNode div = divideInt(pos, rexBuilder, kase, factor);
-      return multiply(pos, rexBuilder, div, factor);
+        RexNode factor = rexBuilder.makeExactLiteral(val);
+        RexNode div = divideInt(pos, rexBuilder, kase, factor);
+        return multiply(pos, rexBuilder, div, factor);
+      }
     }
 
     // normal floor, ceil function
@@ -1196,6 +1205,17 @@ public class StandardConvertletTable extends ReflectiveConvertletTable {
       SqlCall call) {
     final SqlOperator op = call.getOperator();
     final RexBuilder rexBuilder = cx.getRexBuilder();
+
+    // For associative operators (AND, OR), flatten the SqlNode tree iteratively
+    // to avoid StackOverflowError on deeply nested expressions.
+    // The parser creates a left-deep binary tree for chains like
+    // "a AND b AND c AND d ...", and the default convertOperands would recurse
+    // into each nested level, causing stack overflow for large operand counts.
+    final SqlKind kind = op.getKind();
+    if (kind == SqlKind.AND || kind == SqlKind.OR) {
+      return convertAssociativeCall(cx, rexBuilder, call, op, kind);
+    }
+
     SqlOperandTypeChecker operandTypeChecker = op.getOperandTypeChecker();
     final SqlOperandTypeChecker.Consistency consistency =
         operandTypeChecker == null
@@ -1266,6 +1286,69 @@ public class StandardConvertletTable extends ReflectiveConvertletTable {
       }
     }
     return rexBuilder.makeCall(call.getParserPosition(), type, op, RexUtil.flatten(exprs, op));
+  }
+
+  /**
+   * Converts a call to an associative operator (AND, OR) by iteratively
+   * flattening the nested binary SqlNode tree into a flat list of operands,
+   * then converting each operand. This avoids StackOverflowError on deeply
+   * nested expressions.
+   */
+  private static RexNode convertAssociativeCall(
+      SqlRexContext cx,
+      RexBuilder rexBuilder,
+      SqlCall call,
+      SqlOperator op,
+      SqlKind kind) {
+    // Step 1: Iteratively collect all leaf operands from the nested
+    // binary tree. For example, AND(AND(AND(a, b), c), d) becomes [a, b, c, d].
+    final List<SqlNode> operands = new ArrayList<>();
+    final Deque<SqlNode> stack = new ArrayDeque<>();
+    stack.push(call);
+    while (!stack.isEmpty()) {
+      final SqlNode node = stack.pop();
+      if (node instanceof SqlCall && node.getKind() == kind) {
+        final SqlCall subCall = (SqlCall) node;
+        // Push right operand first, then left, so that left is processed first
+        final List<SqlNode> subOperands = subCall.getOperandList();
+        for (int i = subOperands.size() - 1; i >= 0; i--) {
+          stack.push(subOperands.get(i));
+        }
+      } else {
+        operands.add(node);
+      }
+    }
+
+    // Step 2: Convert each leaf operand.
+    final List<RexNode> exprs = new ArrayList<>();
+    for (SqlNode operand : operands) {
+      exprs.add(cx.convertExpression(operand));
+    }
+
+    // Step 3: Apply type coercion consistent with the original binary call.
+    // The validator has already checked the original binary call's operand types.
+    // We replicate the same coercion for all operands.
+    final List<RelDataType> operandTypes =
+        cx.getValidator().getValidatedOperandTypes(call);
+    if (operandTypes != null && !operandTypes.isEmpty()) {
+      // Use the first operand's validated type as the template
+      // (both operands of AND/OR have the same validated type)
+      final RelDataType targetType = operandTypes.get(0);
+      final List<RexNode> coercedExprs = new ArrayList<>();
+      for (RexNode expr : exprs) {
+        coercedExprs.add(
+            rexBuilder.ensureType(call.getParserPosition(), targetType, expr, true));
+      }
+      exprs.clear();
+      exprs.addAll(coercedExprs);
+    }
+
+    // Step 4: Flatten any nested AND/OR RexNodes that may have resulted from
+    // operand conversion (e.g. IN-to-OR expansion), then derive the return type
+    // and create a flat n-ary RexCall.
+    final List<RexNode> flatExprs = RexUtil.flatten(exprs, op);
+    final RelDataType type = rexBuilder.deriveReturnType(op, flatExprs);
+    return rexBuilder.makeCall(call.getParserPosition(), type, op, flatExprs);
   }
 
   private static List<Integer> elseArgs(int count) {

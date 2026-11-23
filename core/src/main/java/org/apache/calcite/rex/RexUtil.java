@@ -19,6 +19,7 @@ package org.apache.calcite.rex;
 import org.apache.calcite.DataContexts;
 import org.apache.calcite.linq4j.function.Predicate1;
 import org.apache.calcite.plan.PlanTooComplexError;
+import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelCollation;
@@ -48,6 +49,7 @@ import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.util.ControlFlowException;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Litmus;
+import org.apache.calcite.util.NumberUtil;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.RangeSets;
 import org.apache.calcite.util.Sarg;
@@ -63,9 +65,14 @@ import com.google.common.collect.Range;
 import org.apiguardian.api.API;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -840,6 +847,130 @@ public class RexUtil {
     }
   }
 
+  /** Returns whether an expression contains a dynamic function. */
+  public static boolean containsDynamicFunction(RexNode e) {
+    try {
+      e.accept(
+          new RexVisitorImpl<Void>(true) {
+            @Override public Void visitCall(RexCall call) {
+              if (call.getOperator().isDynamicFunction()) {
+                throw Util.FoundOne.NULL;
+              }
+              return super.visitCall(call);
+            }
+          });
+      return false;
+    } catch (Util.FoundOne ex) {
+      Util.swallow(ex, null);
+      return true;
+    }
+  }
+
+  /** Returns whether an expression contains a dynamic parameter. */
+  public static boolean containsDynamicParam(RexNode e) {
+    try {
+      e.accept(
+          new RexVisitorImpl<Void>(true) {
+            @Override public Void visitDynamicParam(RexDynamicParam dynamicParam) {
+              throw Util.FoundOne.NULL;
+            }
+          });
+      return false;
+    } catch (Util.FoundOne ex) {
+      Util.swallow(ex, null);
+      return true;
+    }
+  }
+
+  /** Converts a FETCH expression result to its validated canonical representation. */
+  public static BigDecimal validateFetchValue(@Nullable Number value) {
+    return validateOffsetFetchValue(value, "FETCH");
+  }
+
+  /** Creates the FETCH needed when OFFSET and FETCH are pushed into an input.
+   *
+   * <p>Enumerable execution rounds OFFSET and FETCH independently to whole
+   * row counts. Therefore, the input must fetch
+   * {@code CEIL(offset) + CEIL(fetch)} rows rather than
+   * {@code CEIL(offset + fetch)} rows. The latter can be one row smaller when
+   * both values have a fractional part. */
+  public static RexNode makeOffsetFetchSum(RexBuilder rexBuilder,
+      RexNode offset, RexNode fetch) {
+    if (offset instanceof RexLiteral && fetch instanceof RexLiteral) {
+      return rexBuilder.makeExactLiteral(
+          RexLiteral.bigDecimalValue(offset).setScale(0, RoundingMode.CEILING)
+              .add(RexLiteral.bigDecimalValue(fetch)
+                  .setScale(0, RoundingMode.CEILING)));
+    }
+    return rexBuilder.makeCall(SqlStdOperatorTable.PLUS,
+        ceil(rexBuilder, offset), ceil(rexBuilder, fetch));
+  }
+
+  private static RexNode ceil(RexBuilder rexBuilder, RexNode node) {
+    if (node instanceof RexLiteral) {
+      return rexBuilder.makeExactLiteral(
+          RexLiteral.bigDecimalValue(node).setScale(0, RoundingMode.CEILING));
+    }
+    return rexBuilder.makeCall(SqlStdOperatorTable.CEIL, node);
+  }
+
+  /** Converts an OFFSET expression result to its validated canonical representation. */
+  public static BigDecimal validateOffsetValue(@Nullable Number value) {
+    return validateOffsetFetchValue(value, "OFFSET");
+  }
+
+  private static BigDecimal validateOffsetFetchValue(@Nullable Number value,
+      String kind) {
+    if (value == null) {
+      throw new IllegalArgumentException(kind + " expression evaluated to NULL");
+    }
+    final BigDecimal decimal = NumberUtil.toBigDecimal(value);
+    if (decimal.signum() < 0) {
+      throw new IllegalArgumentException(kind + " value " + value
+          + " is out of range; expected a non-negative value");
+    }
+    return decimal;
+  }
+
+  /** Reduces a constant FETCH expression to a validated literal. */
+  public static @Nullable RexLiteral reduceFetchToLiteral(
+      RelOptCluster cluster, RexNode fetch) {
+    return reduceOffsetFetchToLiteral(cluster, fetch, "FETCH");
+  }
+
+  /** Reduces a constant OFFSET expression to a validated literal. */
+  public static @Nullable RexLiteral reduceOffsetToLiteral(
+      RelOptCluster cluster, RexNode offset) {
+    return reduceOffsetFetchToLiteral(cluster, offset, "OFFSET");
+  }
+
+  private static @Nullable RexLiteral reduceOffsetFetchToLiteral(
+      RelOptCluster cluster, RexNode node, String kind) {
+    final RexLiteral literal;
+    if (node instanceof RexLiteral) {
+      literal = (RexLiteral) node;
+    } else {
+      if (!isConstant(node)
+          || !isDeterministic(node)
+          || containsDynamicFunction(node)
+          || containsDynamicParam(node)) {
+        return null;
+      }
+      final RexExecutor executor =
+          Util.first(cluster.getPlanner().getExecutor(), EXECUTOR);
+      final List<RexNode> reducedValues = new ArrayList<>(1);
+      executor.reduce(cluster.getRexBuilder(),
+          Collections.singletonList(node), reducedValues);
+      final RexNode reduced = reducedValues.get(0);
+      if (!(reduced instanceof RexLiteral)) {
+        return null;
+      }
+      literal = (RexLiteral) reduced;
+    }
+    validateOffsetFetchValue(literal.getValueAs(Number.class), kind);
+    return literal;
+  }
+
   public static List<RexNode> retainDeterministic(List<RexNode> list) {
     List<RexNode> conjunctions = new ArrayList<>();
     for (RexNode x : list) {
@@ -938,7 +1069,12 @@ public class RexUtil {
    * @param expr    expression possibly in need of expansion
    * @param recurse whether to check nested calls
    * @return whether the expression requires expansion
+   *
+   * @deprecated Used only by
+   * {@link org.apache.calcite.rel.rules.ReduceDecimalsRule}, which is
+   * deprecated
    */
+  @Deprecated // to be removed before 2.0
   public static boolean requiresDecimalExpansion(
       RexNode expr,
       boolean recurse) {
@@ -989,7 +1125,12 @@ public class RexUtil {
 
   /**
    * Determines whether any operand of a set requires decimal expansion.
+   *
+   * @deprecated Used only by
+   * {@link org.apache.calcite.rel.rules.ReduceDecimalsRule}, which is
+   * deprecated
    */
+  @Deprecated // to be removed before 2.0
   public static boolean requiresDecimalExpansion(
       List<RexNode> operands,
       boolean recurse) {
@@ -1007,7 +1148,12 @@ public class RexUtil {
   /**
    * Returns whether a {@link RexProgram} contains expressions which require
    * decimal expansion.
+   *
+   * @deprecated Used only by
+   * {@link org.apache.calcite.rel.rules.ReduceDecimalsRule}, which is
+   * deprecated
    */
+  @Deprecated // to be removed before 2.0
   public static boolean requiresDecimalExpansion(
       RexProgram program,
       boolean recurse) {
@@ -1020,6 +1166,11 @@ public class RexUtil {
     return false;
   }
 
+  /** Returns whether a REINTERPRET call performs an overflow check.
+   *
+   * @deprecated The REINTERPRET operator is deprecated
+   */
+  @Deprecated // to be removed before 2.0
   public static boolean canReinterpretOverflow(RexCall call) {
     assert call.isA(SqlKind.REINTERPRET) : "call is not a reinterpret";
     return call.operands.size() > 1;
@@ -1370,15 +1521,22 @@ public class RexUtil {
 
   private static void addAnd(ImmutableList.Builder<RexNode> builder,
       Set<RexNode> digests, RexNode node) {
-    switch (node.getKind()) {
-    case AND:
-      for (RexNode operand : ((RexCall) node).getOperands()) {
-        addAnd(builder, digests, operand);
-      }
-      return;
-    default:
-      if (!node.isAlwaysTrue() && digests.add(node)) {
-        builder.add(node);
+    // Use an explicit stack to avoid StackOverflowError on deeply nested ANDs
+    // (e.g. CALCITE-5845)
+    final Deque<RexNode> stack = new ArrayDeque<>();
+    stack.push(node);
+    while (!stack.isEmpty()) {
+      final RexNode current = stack.pop();
+      if (current.getKind() == SqlKind.AND) {
+        final List<RexNode> operands = ((RexCall) current).getOperands();
+        // Push in reverse order so that the leftmost operand is processed first
+        for (int i = operands.size() - 1; i >= 0; i--) {
+          stack.push(operands.get(i));
+        }
+      } else {
+        if (!current.isAlwaysTrue() && digests.add(current)) {
+          builder.add(current);
+        }
       }
     }
   }
@@ -1674,20 +1832,44 @@ public class RexUtil {
    * calls to an associative operator such as AND and OR.
    */
   public static boolean isFlat(RexNode expr) {
-    if (!(expr instanceof RexCall)) {
-      return true;
+    // Use an explicit stack to avoid StackOverflowError on deeply nested
+    // expressions (e.g. CALCITE-5845)
+    final Deque<RexNode> stack = new ArrayDeque<>();
+    stack.push(expr);
+    while (!stack.isEmpty()) {
+      final RexNode current = stack.pop();
+      if (!(current instanceof RexCall)) {
+        continue;
+      }
+      final RexCall call = (RexCall) current;
+      if (!isFlat(call.getOperands(), call.getOperator())) {
+        return false;
+      }
+      for (RexNode operand : call.getOperands()) {
+        stack.push(operand);
+      }
     }
-    final RexCall call = (RexCall) expr;
-    return isFlat(call.getOperands(), call.getOperator())
-        && all(call.getOperands(), RexUtil::isFlat);
+    return true;
   }
 
   private static void flattenRecurse(
       List<RexNode> list, List<? extends RexNode> exprs, SqlOperator op) {
-    for (RexNode expr : exprs) {
+    // Use an explicit stack to avoid StackOverflowError on deeply nested
+    // associative calls (e.g. CALCITE-5845)
+    final Deque<RexNode> stack = new ArrayDeque<>();
+    // Push in reverse order so that the leftmost operand is processed first
+    for (int i = exprs.size() - 1; i >= 0; i--) {
+      stack.push(exprs.get(i));
+    }
+    while (!stack.isEmpty()) {
+      final RexNode expr = stack.pop();
       if (expr instanceof RexCall
           && ((RexCall) expr).getOperator() == op) {
-        flattenRecurse(list, ((RexCall) expr).getOperands(), op);
+        final List<RexNode> operands = ((RexCall) expr).getOperands();
+        // Push in reverse order so that the leftmost operand is processed first
+        for (int i = operands.size() - 1; i >= 0; i--) {
+          stack.push(operands.get(i));
+        }
       } else {
         list.add(expr);
       }
@@ -1757,12 +1939,26 @@ public class RexUtil {
     // NUMERIC -> CHARACTER: allow when target length accommodates sign/scale
     if (sourceSqlTypeName.getFamily() == SqlTypeFamily.NUMERIC
         && targetSqlTypeName.getFamily() == SqlTypeFamily.CHARACTER) {
-      int sourceLength = source.getPrecision() + 1; // include sign
-      if (source.getScale() != -1 && source.getScale() != 0) {
-        sourceLength += source.getScale() + 1; // include decimal mark
-      }
       final int targetPrecision = target.getPrecision();
-      return targetPrecision == PRECISION_NOT_SPECIFIED || targetPrecision >= sourceLength;
+      if (targetPrecision == PRECISION_NOT_SPECIFIED) {
+        return true;
+      }
+      // The precision does not bound the length of the text of an approximate
+      // number, or of a DECIMAL with a negative scale:
+      // CAST(6.666666666666667E0 AS VARCHAR(3)) is '6.6'
+      // CAST(CAST(20000 AS DECIMAL(2, -3)) AS VARCHAR(3)) is '200'
+      // The text of a DOUBLE has at most 24 characters, and that of a REAL at most 15,
+      // but this value depends on the formatting performed by the runtime,
+      // so we are NOT considering such casts as lossless currently.
+      final int sourceScale = source.getScale();
+      if (!SqlTypeUtil.isExactNumeric(source) || sourceScale < 0) {
+        return false;
+      }
+      int sourceLength = source.getPrecision() + 1; // include sign
+      if (sourceScale != 0) {
+        sourceLength += sourceScale + 1; // include decimal mark
+      }
+      return targetPrecision >= sourceLength;
     }
 
     // DECIMAL -> DECIMAL: allow when precision/scale can only expand
@@ -2837,17 +3033,19 @@ public class RexUtil {
       return list;
     }
 
-    private static LinkedHashMap<RexNode, RexNode> commonFactors(List<RexNode> nodes) {
+    private LinkedHashMap<RexNode, RexNode> commonFactors(List<RexNode> nodes) {
       // make sure the result is in deterministic order
       final LinkedHashMap<RexNode, RexNode> map = new LinkedHashMap<>();
       int i = 0;
       for (RexNode node : nodes) {
         if (i++ == 0) {
           for (RexNode conjunction : RelOptUtil.conjunctions(node)) {
-            map.put(conjunction, conjunction);
+            RexNode normalized = normalizeComparison(conjunction);
+            map.put(normalized, conjunction);
           }
         } else {
-          map.keySet().retainAll(RelOptUtil.conjunctions(node));
+          map.keySet().retainAll(
+              Util.transform(RelOptUtil.conjunctions(node), this::normalizeComparison));
         }
       }
       return map;
@@ -2856,11 +3054,56 @@ public class RexUtil {
     private RexNode removeFactor(Map<RexNode, RexNode> factors, RexNode node) {
       List<RexNode> list = new ArrayList<>();
       for (RexNode operand : RelOptUtil.conjunctions(node)) {
-        if (!factors.containsKey(operand)) {
+        RexNode normalized = normalizeComparison(operand);
+        if (!factors.containsKey(normalized)) {
           list.add(operand);
         }
       }
       return and(list);
+    }
+
+    /**
+     * Normalizes a comparison expression so that, when possible, an input ref
+     * appears on the left and a literal or higher-index input ref appears on
+     * the right. This exploits the symmetry of comparisons to help
+     * {@link #commonFactors} recognize equivalent terms.
+     *
+     * <p>Only comparisons that involve an input ref are normalized: if both
+     * operands are input refs, the lower-index one is placed on the left;
+     * if exactly one operand is an input ref, it is placed on the left.
+     * Comparisons whose operands are not input refs (for example, two
+     * CASTs) are returned unchanged.
+     */
+    private RexNode normalizeComparison(RexNode rex) {
+      if (rex instanceof RexCall) {
+        RexCall call = (RexCall) rex;
+        switch (call.getKind()) {
+        case EQUALS:
+        case NOT_EQUALS:
+        case LESS_THAN:
+        case GREATER_THAN:
+        case LESS_THAN_OR_EQUAL:
+        case GREATER_THAN_OR_EQUAL:
+          final List<RexNode> operands = call.getOperands();
+          final RexNode op0 = operands.get(0);
+          final RexNode op1 = operands.get(1);
+          final boolean op0IsInputRef = op0 instanceof RexInputRef;
+          final boolean op1IsInputRef = op1 instanceof RexInputRef;
+          if (op0IsInputRef && op1IsInputRef) {
+            final RexInputRef ref0 = (RexInputRef) op0;
+            final RexInputRef ref1 = (RexInputRef) op1;
+            if (ref0.getIndex() > ref1.getIndex()) {
+              return requireNonNull(invert(rexBuilder, call));
+            }
+          } else if (!op0IsInputRef && op1IsInputRef) {
+            return requireNonNull(invert(rexBuilder, call));
+          }
+          break;
+        default:
+          break;
+        }
+      }
+      return rex;
     }
 
     private RexNode and(Iterable<? extends RexNode> nodes) {
@@ -3048,14 +3291,12 @@ public class RexUtil {
         Map<K, RexNode> baseMap,
         Map<K, RexNode> forMergeMap) {
       for (Map.Entry<K, RexNode> entry : forMergeMap.entrySet()) {
+        final RexNode baseRex = baseMap.get(entry.getKey());
         RexNode mergedRex =
-            relBuilder.and(
-                entry.getValue(),
-                baseMap.getOrDefault(entry.getKey(), relBuilder.literal(true)));
+            relBuilder.and(entry.getValue(),
+                baseRex == null ? relBuilder.literal(true) : baseRex);
         int originalCount = entry.getValue().nodeCount()
-            + (baseMap.containsKey(entry.getKey())
-            ? baseMap.get(entry.getKey()).nodeCount()
-            : 0);
+            + (baseRex == null ? 0 : baseRex.nodeCount());
         checkExpandCount(mergedRex.nodeCount() - originalCount);
         baseMap.put(entry.getKey(), mergedRex);
       }
@@ -3084,23 +3325,17 @@ public class RexUtil {
       Iterator<Map.Entry<K, RexNode>> iterator =
           baseMap.entrySet().iterator();
       while (iterator.hasNext()) {
-        int forMergeNodeCount = 0;
-
         Map.Entry<K, RexNode> entry = iterator.next();
-        if (!forMergeMap.containsKey(entry.getKey())) {
+        final RexNode forMergeRex = forMergeMap.get(entry.getKey());
+        if (forMergeRex == null) {
           checkExpandCount(-entry.getValue().nodeCount());
           iterator.remove();
           continue;
-        } else {
-          forMergeNodeCount = forMergeMap.get(entry.getKey()).nodeCount();
         }
-        RexNode mergedRex =
-            relBuilder.or(
-                entry.getValue(),
-                forMergeMap.get(entry.getKey()));
-        int originalCount = entry.getValue().nodeCount() + forMergeNodeCount;
+        RexNode mergedRex = relBuilder.or(entry.getValue(), forMergeRex);
+        int originalCount = entry.getValue().nodeCount() + forMergeRex.nodeCount();
         checkExpandCount(mergedRex.nodeCount() - originalCount);
-        baseMap.put(entry.getKey(), mergedRex);
+        entry.setValue(mergedRex);
       }
     }
 
@@ -3209,22 +3444,40 @@ public class RexUtil {
     }
   }
 
-  /** Visitor that collects all the top level SubQueries {@link RexSubQuery}
-   *  in a projection list of a given {@link Project}.*/
+  /** Visitor that collects {@link RexSubQuery} expressions. */
   public static class SubQueryCollector extends RexVisitorImpl<Void> {
     private final List<RexSubQuery> subQueries;
-    private SubQueryCollector() {
-      super(true);
+
+    /** Creates a collector.
+     *
+     * @param deep Whether to visit expression operands; relational expressions
+     *     inside sub-queries are never visited
+     */
+    public SubQueryCollector(boolean deep) {
+      super(deep);
       this.subQueries = new ArrayList<>();
     }
 
     @Override public Void visitSubQuery(RexSubQuery subQuery) {
       subQueries.add(subQuery);
-      return null;
+      return super.visitSubQuery(subQuery);
     }
 
-    public static List<RexSubQuery> collect(Project project) {
-      SubQueryCollector subQueryCollector = new SubQueryCollector();
+    /** Returns an immutable snapshot of the sub-queries collected so far,
+     * in visitation order. */
+    public List<RexSubQuery> getSubQueries() {
+      return ImmutableList.copyOf(subQueries);
+    }
+
+    /** Collects {@link RexSubQuery} expressions in the projection list
+     * of a given {@link Project}.
+     *
+     * @param project Project whose expressions are visited
+     * @param deep Whether to recursively visit expression operands; if false,
+     *     collects only top-level {@link RexSubQuery} expressions in the projection list
+     */
+    public static List<RexSubQuery> collect(Project project, boolean deep) {
+      SubQueryCollector subQueryCollector = new SubQueryCollector(deep);
       for (RexNode node : project.getProjects()) {
         node.accept(subQueryCollector);
       }
@@ -3236,6 +3489,7 @@ public class RexUtil {
    * applied to an expression that contains a {@link RexSubQuery}. */
   public static class SubQueryFinder extends RexVisitorImpl<Void> {
     public static final SubQueryFinder INSTANCE = new SubQueryFinder();
+    private final @Nullable SqlKind kind;
 
     @SuppressWarnings("Guava")
     @Deprecated // to be removed before 2.0
@@ -3253,7 +3507,12 @@ public class RexUtil {
         SubQueryFinder::containsSubQuery;
 
     private SubQueryFinder() {
+      this(null);
+    }
+
+    private SubQueryFinder(@Nullable SqlKind kind) {
       super(true);
+      this.kind = kind;
     }
 
     /** Returns whether a {@link Project} contains a sub-query. */
@@ -3289,7 +3548,10 @@ public class RexUtil {
     }
 
     @Override public Void visitSubQuery(RexSubQuery subQuery) {
-      throw new Util.FoundOne(subQuery);
+      if (kind == null || subQuery.getKind() == kind) {
+        throw new Util.FoundOne(subQuery);
+      }
+      return super.visitSubQuery(subQuery);
     }
 
     public static @Nullable RexSubQuery find(Iterable<RexNode> nodes) {
@@ -3306,6 +3568,16 @@ public class RexUtil {
     public static @Nullable RexSubQuery find(RexNode node) {
       try {
         node.accept(INSTANCE);
+        return null;
+      } catch (Util.FoundOne e) {
+        return (RexSubQuery) e.getNode();
+      }
+    }
+
+    /** Returns the first sub-query of the given kind, or {@code null}. */
+    public static @Nullable RexSubQuery find(RexNode node, SqlKind kind) {
+      try {
+        node.accept(new SubQueryFinder(kind));
         return null;
       } catch (Util.FoundOne e) {
         return (RexSubQuery) e.getNode();

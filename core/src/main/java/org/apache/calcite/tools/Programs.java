@@ -81,6 +81,7 @@ public class Programs {
           EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE,
           EnumerableRules.ENUMERABLE_JOIN_RULE,
           EnumerableRules.ENUMERABLE_MERGE_JOIN_RULE,
+          EnumerableRules.ENUMERABLE_IE_JOIN_RULE,
           EnumerableRules.ENUMERABLE_CORRELATE_RULE,
           EnumerableRules.ENUMERABLE_CONDITIONAL_CORRELATE_RULE,
           EnumerableRules.ENUMERABLE_PROJECT_RULE,
@@ -260,6 +261,7 @@ public class Programs {
         ImmutableList.of(CoreRules.FILTER_SUB_QUERY_TO_CORRELATE,
             CoreRules.PROJECT_SUB_QUERY_TO_CORRELATE,
             CoreRules.JOIN_SUB_QUERY_TO_CORRELATE,
+            CoreRules.TABLE_FUNCTION_SCAN_SCALAR_QUERY_TO_CORRELATE,
             CoreRules.PROJECT_OVER_SUM_TO_SUM0_RULE));
     final Program oldProgram = of(builder.build(), true, metadataProvider);
 
@@ -268,6 +270,7 @@ public class Programs {
         ImmutableList.of(CoreRules.FILTER_SUB_QUERY_TO_MARK_CORRELATE,
             CoreRules.PROJECT_SUB_QUERY_TO_MARK_CORRELATE,
             CoreRules.JOIN_SUB_QUERY_TO_CORRELATE,
+            CoreRules.TABLE_FUNCTION_SCAN_SCALAR_QUERY_TO_CORRELATE,
             CoreRules.PROJECT_OVER_SUM_TO_SUM0_RULE));
     final Program newProgram = of(newBuilder.build(), true, metadataProvider);
 

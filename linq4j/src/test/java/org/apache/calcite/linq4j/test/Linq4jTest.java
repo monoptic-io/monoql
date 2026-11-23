@@ -24,6 +24,7 @@ import org.apache.calcite.linq4j.ExtendedEnumerable;
 import org.apache.calcite.linq4j.Grouping;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.Lookup;
+import org.apache.calcite.linq4j.OrderedQueryable;
 import org.apache.calcite.linq4j.Queryable;
 import org.apache.calcite.linq4j.QueryableDefaults;
 import org.apache.calcite.linq4j.function.EqualityComparer;
@@ -36,6 +37,7 @@ import org.apache.calcite.linq4j.function.Predicate1;
 import org.apache.calcite.linq4j.function.Predicate2;
 import org.apache.calcite.linq4j.tree.ConstantExpression;
 import org.apache.calcite.linq4j.tree.Expressions;
+import org.apache.calcite.linq4j.tree.FunctionExpression;
 import org.apache.calcite.linq4j.tree.ParameterExpression;
 
 import com.example.Linq4jExample;
@@ -1157,6 +1159,35 @@ public class Linq4jTest {
     assertFalse(productAbcXy.moveNext());
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7877">[CALCITE-7877]
+   * EnumerableDefaults.asOrderedQueryable throws NullPointerException for any
+   * Enumerable that is not already an OrderedQueryable</a>. */
+  @Test void testAsOrderedQueryable() {
+    final OrderedQueryable<Integer> queryable =
+        EnumerableDefaults.asOrderedQueryable(
+            Linq4j.asEnumerable(Arrays.asList(1, 2)));
+    assertThat(queryable.toList(), is(Arrays.asList(1, 2)));
+    assertThat(queryable.getProvider(), sameInstance(Linq4j.DEFAULT_PROVIDER));
+
+    // Queryable.orderBy and orderByDescending on a plain Enumerable go
+    // through asOrderedQueryable
+    final Queryable<Employee> queryableEmps =
+        Linq4j.asEnumerable(emps).asQueryable();
+    final FunctionExpression<Function1<Employee, String>> name =
+        Expressions.lambda(e -> e.name);
+    assertThat(
+        queryableEmps.orderBy(name).select(e -> e.name).toList(),
+        is(Arrays.asList("Bill", "Eric", "Fred", "Janet")));
+    assertThat(
+        queryableEmps.orderByDescending(name).select(e -> e.name).toList(),
+        is(Arrays.asList("Janet", "Fred", "Eric", "Bill")));
+    assertThat(
+        queryableEmps.orderBy(name, Comparator.reverseOrder())
+            .select(e -> e.name).toList(),
+        is(Arrays.asList("Janet", "Fred", "Eric", "Bill")));
+  }
+
   @Test void testAsQueryable() {
     // "count" is an Enumerable method.
     final int n =
@@ -1262,6 +1293,28 @@ public class Linq4jTest {
             .toList(), hasSize(0));
     assertThat(EnumerableDefaults.take(Linq4j.asEnumerable(depts), -2)
             .toList(), hasSize(0));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7624">[CALCITE-7624]
+   * Support BigDecimal for FETCH and OFFSET in Enumerable</a>. */
+  @Test void testTakeEnumerableDefaultsBigDecimalSize() {
+    assertThat(
+        EnumerableDefaults.take(Linq4j.asEnumerable(depts),
+        new BigDecimal("1.5")).toList(), hasSize(2));
+    assertThat(
+        EnumerableDefaults.take(Linq4j.asEnumerable(depts),
+        BigDecimal.valueOf(-2)).toList(), hasSize(0));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7624">[CALCITE-7624]
+   * Support BigDecimal for FETCH and OFFSET in Enumerable</a>. */
+  @Test void testTakeListEnumerableBigDecimalSize() {
+    assertThat(Linq4j.asEnumerable(depts).take(new BigDecimal("1.5"))
+        .toList(), hasSize(2));
+    assertThat(Linq4j.asEnumerable(depts).take(BigDecimal.valueOf(-2))
+        .toList(), hasSize(0));
   }
 
   @Test void testTakeQueryableZeroOrNegativeSize() {
@@ -1422,6 +1475,28 @@ public class Linq4jTest {
         Linq4j.asEnumerable(depts).asQueryable().skipWhileN(
             Expressions.lambda((v1, v2) -> v1.name.equals("Sales")
                 || v2 == 1)).count(), is(1));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7624">[CALCITE-7624]
+   * Support BigDecimal for FETCH and OFFSET in Enumerable</a>. */
+  @Test void testSkipEnumerableDefaultsBigDecimalSize() {
+    assertThat(
+        EnumerableDefaults.skip(Linq4j.asEnumerable(depts),
+        new BigDecimal("1.5")).count(), is(1));
+    assertThat(
+        EnumerableDefaults.skip(Linq4j.asEnumerable(depts),
+        BigDecimal.valueOf(-2)).count(), is(3));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7624">[CALCITE-7624]
+   * Support BigDecimal for FETCH and OFFSET in Enumerable</a>. */
+  @Test void testSkipListEnumerableBigDecimalSize() {
+    assertThat(Linq4j.asEnumerable(depts).skip(new BigDecimal("1.5"))
+        .count(), is(1));
+    assertThat(Linq4j.asEnumerable(depts).skip(BigDecimal.valueOf(-2))
+        .count(), is(3));
   }
 
   @Test void testOrderBy() {
@@ -2194,4 +2269,20 @@ public class Linq4jTest {
       new Department("HR", 20, ImmutableList.of()),
       new Department("Marketing", 30, ImmutableList.of(emps[1])),
   };
+
+  @Test void testTakeListEnumerableNegativeSize() {
+    final List<Integer> values = Arrays.asList(1, 2, 3);
+
+    assertThat(EnumerableDefaults.take(Linq4j.asEnumerable(values), -1).toList(),
+        is(empty()));
+    assertThat(Linq4j.asEnumerable(values).take(-1).toList(), is(empty()));
+  }
+
+  @Test void testSkipListEnumerableNegativeSize() {
+    final List<Integer> values = Arrays.asList(1, 2, 3);
+
+    assertThat(EnumerableDefaults.skip(Linq4j.asEnumerable(values), -1).toList(),
+        is(values));
+    assertThat(Linq4j.asEnumerable(values).skip(-1).toList(), is(values));
+  }
 }

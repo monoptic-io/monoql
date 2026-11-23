@@ -81,6 +81,9 @@ public abstract class Functions {
   private static final EqualityComparer<@Nullable Object[]> ARRAY_COMPARER =
       new ArrayEqualityComparer();
 
+  private static final EqualityComparer<@Nullable Object> DEEP_COMPARER =
+      new DeepEqualityComparer();
+
   private static final Function1 CONSTANT_NULL_FUNCTION1 =
       (Function1<Object, @Nullable Object>) s -> null;
 
@@ -488,6 +491,21 @@ public abstract class Functions {
     return new SelectorEqualityComparer<>(selector);
   }
 
+  /**
+   * Returns an {@link EqualityComparer} that compares values deeply:
+   * {@code Object[]} arrays and {@link List}s are compared element-wise and
+   * recursively, and compare equal to each other when their elements are
+   * equal, regardless of container kind; primitive arrays are compared by
+   * content; {@link BigDecimal} values are compared numerically, ignoring scale;
+   * {@code null} equals {@code null}.
+   *
+   * <p>This implements the SQL "not distinct" semantics used by
+   * {@code GROUP BY}, {@code DISTINCT} and set operations. */
+  @SuppressWarnings("unchecked")
+  public static <T> EqualityComparer<T> deepComparer() {
+    return (EqualityComparer) DEEP_COMPARER;
+  }
+
   /** Array equality comparer. */
   private static class ArrayEqualityComparer
       implements EqualityComparer<@Nullable Object[]> {
@@ -498,6 +516,140 @@ public abstract class Functions {
     @Override public int hashCode(@Nullable Object[] t) {
       return Arrays.deepHashCode(t);
     }
+  }
+
+  /** Deep equality comparer; see {@link #deepComparer()}. */
+  private static class DeepEqualityComparer
+      implements EqualityComparer<@Nullable Object> {
+    @Override public boolean equal(@Nullable Object v1, @Nullable Object v2) {
+      return deepEquals(v1, v2);
+    }
+
+    @Override public int hashCode(@Nullable Object t) {
+      return deepHashCode(t);
+    }
+  }
+
+  /** Compares values recursively; see {@link #deepComparer()}. */
+  public static boolean deepEquals(@Nullable Object v1, @Nullable Object v2) {
+    if (v1 == v2) {
+      return true;
+    }
+    if (v1 == null || v2 == null) {
+      return false;
+    }
+    // Normalize both to List: an ARRAY of ROW is a List of Object[],
+    // and each element is normalized in turn.
+    final @Nullable List<?> list1 = asListOrNull(v1);
+    final @Nullable List<?> list2 = asListOrNull(v2);
+    if (list1 != null && list2 != null) {
+      final int n = list1.size();
+      if (n != list2.size()) {
+        return false;
+      }
+      for (int i = 0; i < n; i++) {
+        if (!deepEquals(list1.get(i), list2.get(i))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (list1 != null || list2 != null) {
+      return false;
+    }
+    if (v1 instanceof Map && v2 instanceof Map) {
+      return mapDeepEquals((Map<?, ?>) v1, (Map<?, ?>) v2);
+    }
+    if (v1.getClass().isArray() && v2.getClass().isArray()) {
+      // Primitive arrays (e.g. byte[] for BINARY values).
+      return Arrays.deepEquals(new Object[] {v1}, new Object[] {v2});
+    }
+    if (v1 instanceof BigDecimal && v2 instanceof BigDecimal) {
+      return ((BigDecimal) v1).compareTo((BigDecimal) v2) == 0;
+    }
+    return v1.equals(v2);
+  }
+
+  /** Compares two maps as unordered sets of entries, comparing keys and
+   * values deeply.
+   *
+   * <p>Java {@link Map#equals} is already order-independent, but it looks a
+   * key up by that key's own hashCode and equals, which matches a struct key
+   * only by reference; hence the scan. */
+  private static boolean mapDeepEquals(Map<?, ?> m1, Map<?, ?> m2) {
+    if (m1.size() != m2.size()) {
+      return false;
+    }
+    // Remove on match, so that keys that are deep-equal but distinct to
+    // Java, as two Object[] with the same contents are, pair up one to one.
+    final List<Map.Entry<?, ?>> unmatched = new ArrayList<>(m2.entrySet());
+    for (Map.Entry<?, ?> e1 : m1.entrySet()) {
+      boolean found = false;
+      for (int i = 0; i < unmatched.size(); i++) {
+        final Map.Entry<?, ?> e2 = unmatched.get(i);
+        if (deepEquals(e1.getKey(), e2.getKey())
+            && deepEquals(e1.getValue(), e2.getValue())) {
+          unmatched.remove(i);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Computes a hash code that is equal for values that
+   * {@link #deepEquals} considers equal; in particular, an
+   * {@code Object[]} and a {@link List} with equal elements hash alike. */
+  public static int deepHashCode(@Nullable Object o) {
+    if (o == null) {
+      return 0x789d;
+    }
+    final @Nullable List<?> list = asListOrNull(o);
+    if (list != null) {
+      int h = 1;
+      for (Object element : list) {
+        h = 31 * h + deepHashCode(element);
+      }
+      return h;
+    }
+    if (o instanceof Map) {
+      // Sum of per-entry hashes, as Map.hashCode does, so that the hash
+      // ignores entry order just as mapDeepEquals does.
+      int h = 0;
+      for (Map.Entry<?, ?> e : ((Map<?, ?>) o).entrySet()) {
+        h += deepHashCode(e.getKey()) ^ deepHashCode(e.getValue());
+      }
+      return h;
+    }
+    if (o.getClass().isArray()) {
+      return Arrays.deepHashCode(new Object[] {o});
+    }
+    if (o instanceof BigDecimal) {
+      final BigDecimal decimal = (BigDecimal) o;
+      try {
+        return decimal.stripTrailingZeros().hashCode();
+      } catch (ArithmeticException e) {
+        // The fully stripped scale is below the minimum representable scale.
+        return decimal.setScale(Integer.MIN_VALUE).hashCode();
+      }
+    }
+    return o.hashCode();
+  }
+
+  /** Views {@code o} as a list if it is a {@code List} or an
+   * {@code Object[]}; returns null otherwise. */
+  private static @Nullable List<?> asListOrNull(Object o) {
+    if (o instanceof List) {
+      return (List<?>) o;
+    }
+    if (o instanceof Object[]) {
+      return Arrays.asList((Object[]) o);
+    }
+    return null;
   }
 
   /** Identity equality comparer. */
@@ -597,17 +749,14 @@ public abstract class Functions {
   /**
    * Compares two maps.
    *
-   * <p>Since maps in Calcite are implemented using {@link java.util.LinkedHashMap},
-   * which guarantees insertion order, this method follows DuckDB's behavior by
-   * comparing entries in order. For each entry, it first compares the key and
-   * then the value.
+   * <p>Entries are compared in a canonical order, sorted by key and then by value.
    */
   public static int compareMaps(Map<?, ?> b0, Map<?, ?> b1) {
     if (b0 == b1) {
       return 0;
     }
-    final Iterator<? extends Map.Entry<?, ?>> i0 = b0.entrySet().iterator();
-    final Iterator<? extends Map.Entry<?, ?>> i1 = b1.entrySet().iterator();
+    final Iterator<? extends Map.Entry<?, ?>> i0 = sortedEntries(b0).iterator();
+    final Iterator<? extends Map.Entry<?, ?>> i1 = sortedEntries(b1).iterator();
     while (i0.hasNext() && i1.hasNext()) {
       Map.Entry<?, ?> e0 = i0.next();
       Map.Entry<?, ?> e1 = i1.next();
@@ -629,6 +778,17 @@ public abstract class Functions {
     return 0;
   }
 
+  /** Returns the entries of a map in a canonical order that does not depend
+   * on the map's iteration order: sorted by key, ties broken by value. */
+  private static List<Map.Entry<?, ?>> sortedEntries(Map<?, ?> map) {
+    final List<Map.Entry<?, ?>> entries = new ArrayList<>(map.entrySet());
+    entries.sort((e0, e1) -> {
+      final int c = compareListItems(e0.getKey(), e1.getKey());
+      return c != 0 ? c : compareListItems(e0.getValue(), e1.getValue());
+    });
+    return entries;
+  }
+
   private static BigDecimal toBigDecimal(Number number) {
     return number instanceof BigDecimal ? (BigDecimal) number
         : number instanceof BigInteger ? new BigDecimal((BigInteger) number)
@@ -636,7 +796,12 @@ public abstract class Functions {
         : new BigDecimal(number.doubleValue());
   }
 
-  private static int compareListItems(@Nullable Object item0, @Nullable Object item1) {
+  /** Compares two values as elements of a list, array or row: nested
+   * collections and arrays are compared element-wise, numbers are compared by
+   * value regardless of their Java type, and nulls sort last. Floating-point
+   * values of the same Java type use their natural order, with signed zeros
+   * comparing equal. */
+  public static int compareListItems(@Nullable Object item0, @Nullable Object item1) {
     if (item0 == item1) {
       return 0;
     }
@@ -654,6 +819,16 @@ public abstract class Functions {
     } else if (item0 instanceof Object[] && item1 instanceof Object[]) {
       return compareObjectArrays((Object[]) item0, (Object[]) item1);
     } else if (item0 instanceof Number && item1 instanceof Number) {
+      if (item0 instanceof Double && item1 instanceof Double) {
+        final double d0 = (Double) item0;
+        final double d1 = (Double) item1;
+        return d0 == d1 ? 0 : Double.compare(d0, d1);
+      }
+      if (item0 instanceof Float && item1 instanceof Float) {
+        final float f0 = (Float) item0;
+        final float f1 = (Float) item1;
+        return f0 == f1 ? 0 : Float.compare(f0, f1);
+      }
       final BigDecimal d0 = toBigDecimal((Number) item0);
       final BigDecimal d1 = toBigDecimal((Number) item1);
       return d0.compareTo(d1);

@@ -172,7 +172,7 @@ class SqlHintsConverterTest {
   /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-7498">[CALCITE-7498]
    * The parser rejects the example hints from the documentation</a>. */
   @Test void testDocumentationExample() {
-    final String sql = "SELECT /*+ hint1, hint2(a='1', b='2') */ *\n"
+    final String sql = "SELECT /*+ hint1, hint2(a=1, b=2) */ *\n"
         + "FROM emp /*+ hint3(5, 'x') */\n"
         + "JOIN dept /*+ hint4(c=id), hint5 */\n"
         + "ON emp.deptno = dept.deptno";
@@ -197,6 +197,12 @@ class SqlHintsConverterTest {
 
   @Test void testQueryHintWithLiteralOptions() {
     final String sql = "select /*+ time_zone(1, 1.23, 'a bc', -1.0) */ *\n"
+        + "from emp";
+    sql(sql).ok();
+  }
+
+  @Test void testQueryHintWithKeyValueNumericLiteralOptions() {
+    final String sql = "select /*+ hint2(a=1, b=-1, c=1.1, d=-1.1, e=1e3, f=-1e-4) */ *\n"
         + "from emp";
     sql(sql).ok();
   }
@@ -675,6 +681,14 @@ class SqlHintsConverterTest {
         + RelOptUtil.toString(newRel));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4581">[CALCITE-4581]
+   * The digest of TableScan should consider table hints</a>. */
+  @Test void testTableScanHint() {
+    final String sql = "select * from emp /*+ index(idx1) */";
+    sql(sql).ok();
+  }
+
   //~ Methods ----------------------------------------------------------------
 
   private static boolean equalsStringList(List<String> l, List<String> r) {
@@ -974,24 +988,25 @@ class SqlHintsConverterTest {
         return super.visit(values);
       }
 
-      @Override public RelNode visit(RelNode other) {
-        if (other instanceof Window) {
-          Window window = (Window) other;
-          if (!window.getHints().isEmpty()) {
-            this.hintsCollect.add("Window:" + window.getHints());
-          }
-        } else if (other instanceof Snapshot) {
-          Snapshot snapshot = (Snapshot) other;
-          if (!snapshot.getHints().isEmpty()) {
-            this.hintsCollect.add("Snapshot:" + snapshot.getHints());
-          }
-        } else if (other instanceof TableFunctionScan) {
-          TableFunctionScan scan = (TableFunctionScan) other;
-          if (!scan.getHints().isEmpty()) {
-            this.hintsCollect.add("TableFunctionScan:" + scan.getHints());
-          }
+      @Override public RelNode visit(TableFunctionScan scan) {
+        if (!scan.getHints().isEmpty()) {
+          this.hintsCollect.add("TableFunctionScan:" + scan.getHints());
         }
-        return super.visit(other);
+        return super.visit(scan);
+      }
+
+      @Override public RelNode visit(Window window) {
+        if (!window.getHints().isEmpty()) {
+          this.hintsCollect.add("Window:" + window.getHints());
+        }
+        return super.visit(window);
+      }
+
+      @Override public RelNode visit(Snapshot snapshot) {
+        if (!snapshot.getHints().isEmpty()) {
+          this.hintsCollect.add("Snapshot:" + snapshot.getHints());
+        }
+        return super.visit(snapshot);
       }
     }
   }

@@ -29,6 +29,7 @@ import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.ViewExpanders;
 import org.apache.calcite.prepare.RelOptTableImpl;
+import org.apache.calcite.rel.EmptyRowTypePolicy;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelDistribution;
@@ -86,6 +87,7 @@ import org.apache.calcite.rex.RexSimplify;
 import org.apache.calcite.rex.RexSubQuery;
 import org.apache.calcite.rex.RexUnknownAs;
 import org.apache.calcite.rex.RexUtil;
+import org.apache.calcite.rex.RexVisitorImpl;
 import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.rex.RexWindowBounds;
 import org.apache.calcite.rex.RexWindowExclusion;
@@ -108,6 +110,7 @@ import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.type.SqlReturnTypeInference;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.sql.type.SqlTypeUtil;
 import org.apache.calcite.sql.type.TableFunctionReturnTypeInference;
 import org.apache.calcite.sql.validate.SqlValidatorUtil;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
@@ -139,6 +142,7 @@ import org.immutables.value.Value;
 
 import java.math.BigDecimal;
 import java.util.AbstractList;
+import java.util.AbstractQueue;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -148,10 +152,12 @@ import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -193,7 +199,11 @@ import static java.util.Objects.requireNonNull;
 public class RelBuilder {
   protected final RelOptCluster cluster;
   protected final @Nullable RelOptSchema relOptSchema;
-  private final Deque<Frame> stack = new ArrayDeque<>();
+  /** Stack of relational expressions that are being built.
+   *
+   * <p>Checks each relational expression for an empty row type as it is
+   * pushed; see {@link FrameStack}. */
+  private final FrameStack stack = new FrameStack();
   private RexSimplify simplifier;
   private final Config config;
   private final RelOptTable.ViewExpander viewExpander;
@@ -374,6 +384,17 @@ public class RelBuilder {
   private void replaceTop(RelNode node) {
     final Frame frame = stack.pop();
     stack.push(new Frame(node, frame.fields));
+  }
+
+  /** Throws if the row type of {@code rel} is empty and the given
+   * {@code config}'s {@link Config#emptyRowTypePolicy()} is
+   * {@link EmptyRowTypePolicy#FORBIDDEN}. */
+  private static void checkEmptyRowType(Config config, RelNode rel) {
+    if (config.emptyRowTypePolicy() == EmptyRowTypePolicy.FORBIDDEN
+        && rel.getRowType().getFieldCount() == 0) {
+      throw new IllegalArgumentException("empty row type is forbidden by "
+          + "the emptyRowTypePolicy config: " + rel);
+    }
   }
 
   /** Pushes a collection of relational expressions. */
@@ -1938,9 +1959,13 @@ public class RelBuilder {
     if (config.simplify()) {
       conjunctionPredicates = simplifier.simplifyFilterPredicates(predicates);
     } else {
+      // The config says "do not simplify", but without the following optimizations
+      // filter construction may fail because the predicates do not respect
+      // invariants checked by the filter constructor in Filter.isValid().
       List<RexNode> simplified = new ArrayList<>();
       for (RexNode predicate : predicates) {
-        RexNode simple = RexSimplify.simplifyComparisonWithNull(predicate, getRexBuilder());
+        RexNode simple = simplifier.removeNullabilityCast(predicate);
+        simple = RexSimplify.simplifyComparisonWithNull(simple, getRexBuilder());
         simplified.add(simple);
       }
       conjunctionPredicates =
@@ -2377,17 +2402,89 @@ public class RelBuilder {
    * @param itemAliases   Operand item aliases, never null
    * @param withOrdinality If {@code withOrdinality}, the output contains an extra
    * {@code ORDINALITY} column
+   *
+   * @deprecated Use
+   * {@link #uncollect(List, boolean, boolean, boolean)}, which controls every
+   * flag explicitly. This overload derives {@code expandStructFields} from the
+   * item aliases, which cannot express a collection of structs that is kept
+   * whole without aliases, and it cannot create an outer {@code Uncollect}.
    */
+  @Deprecated // to be removed before 2.0
   public RelBuilder uncollect(List<String> itemAliases, boolean withOrdinality) {
+    return uncollect(itemAliases, withOrdinality,
+        requireNonNull(itemAliases, "itemAliases").isEmpty(), false);
+  }
+
+  /**
+   * Creates an {@link Uncollect} with given item aliases, with explicit control
+   * over every flag.
+   *
+   * @param itemAliases   Operand item aliases, never null
+   * @param withOrdinality If {@code withOrdinality}, the output contains an extra
+   * {@code ORDINALITY} column
+   * @param expandStructFields If true, a collection whose element type is a struct
+   * produces one output column per struct field; if false, a single column typed
+   * as the whole element
+   * @param isOuter If {@code isOuter}, an empty or NULL collection yields one row
+   * of NULLs (LEFT JOIN); otherwise it yields no rows (INNER)
+   */
+  public RelBuilder uncollect(List<String> itemAliases, boolean withOrdinality,
+      boolean expandStructFields, boolean isOuter) {
     Frame frame = stack.pop();
+    final RelNode input = frame.rel;
     stack.push(
         new Frame(
           new Uncollect(
               cluster,
               cluster.traitSetOf(Convention.NONE),
-              frame.rel,
+              input,
               withOrdinality,
-              requireNonNull(itemAliases, "itemAliases"))));
+              requireNonNull(itemAliases, "itemAliases"),
+              ImmutableBitSet.of(),
+              ImmutableBitSet.range(input.getRowType().getFieldCount()),
+              expandStructFields,
+              isOuter)));
+    return this;
+  }
+
+  /**
+   * Creates an {@link Uncollect} that unnests the collection-typed fields at
+   * the given 0-based indices of the top-of-stack relation, with explicit
+   * control over which other fields pass through to the output.
+   *
+   * <p>Output columns: all passthrough fields first (in ascending input index
+   * order), then all collection-element columns (in ascending input index
+   * order); all other input fields are dropped.
+   *
+   * @param passthroughFieldIndices 0-based indices of the input fields
+   *                                to include in the output unchanged
+   * @param collectionFieldIndices  0-based indices of the collection-typed
+   *                                fields to unnest
+   * @param withOrdinality          whether to append an ORDINALITY column
+   * @param expandStructFields      if true, a collection whose element type is a struct
+   *                                produces one output column per struct field; if false,
+   *                                a single column typed as the whole element
+   * @param isOuter                 if true, preserves input rows with null/empty
+   *                                collections (LEFT JOIN); if false, drops them (INNER)
+   */
+  public RelBuilder uncollect(
+      ImmutableBitSet passthroughFieldIndices,
+      ImmutableBitSet collectionFieldIndices,
+      boolean withOrdinality,
+      boolean expandStructFields,
+      boolean isOuter) {
+    Frame frame = stack.pop();
+    stack.push(
+        new Frame(
+            Uncollect.create(
+                cluster.traitSetOf(Convention.NONE),
+                frame.rel,
+                withOrdinality,
+                Collections.emptyList(),
+                passthroughFieldIndices,
+                collectionFieldIndices,
+                expandStructFields,
+                isOuter)));
     return this;
   }
 
@@ -3795,25 +3892,14 @@ public class RelBuilder {
 
   /** Creates a {@link Sort} by a list of expressions, with limitNode and offsetNode.
    *
-   * @param offsetNode RexLiteral means number of rows to skip is deterministic,
-   *                   RexDynamicParam means number of rows to skip is dynamic.
-   * @param fetchNode  RexLiteral means maximum number of rows to fetch is deterministic,
-   *                   RexDynamicParam mean maximum number is dynamic.
+   * @param offsetNode Number of rows to skip
+   * @param fetchNode  Maximum number of rows to fetch
    * @param nodes      Sort expressions
    */
   public RelBuilder sortLimit(@Nullable RexNode offsetNode, @Nullable RexNode fetchNode,
       Iterable<? extends RexNode> nodes) {
-    if (offsetNode != null) {
-      if (!(offsetNode instanceof RexLiteral || offsetNode instanceof RexDynamicParam)) {
-        throw new IllegalArgumentException("OFFSET node must be RexLiteral or RexDynamicParam");
-      }
-    }
-    if (fetchNode != null) {
-      if (!(fetchNode instanceof RexLiteral || fetchNode instanceof RexDynamicParam)) {
-        throw new IllegalArgumentException("FETCH node must be RexLiteral or RexDynamicParam");
-      }
-    }
-
+    validateOffsetFetchExpression(offsetNode, "OFFSET");
+    validateOffsetFetchExpression(fetchNode, "FETCH");
     final Registrar registrar = new Registrar(fields(), ImmutableList.of());
     final List<RelFieldCollation> fieldCollations =
         registrar.registerFieldCollations(nodes);
@@ -3878,6 +3964,55 @@ public class RelBuilder {
       project(registrar.originalExtraNodes);
     }
     return this;
+  }
+
+  private static void validateOffsetFetchExpression(@Nullable RexNode node,
+      String kind) {
+    if (node == null) {
+      return;
+    }
+    if (!isValidOffsetFetchExpression(node)) {
+      throw new IllegalArgumentException(
+          kind + " node must not reference input fields or contain aggregate functions, "
+              + "window functions, or subqueries");
+    }
+    if (!SqlTypeUtil.isNumeric(node.getType())) {
+      throw new IllegalArgumentException(
+          kind + " node must have a numeric type; actual type is "
+              + node.getType().getFullTypeString());
+    }
+  }
+
+  private static boolean isValidOffsetFetchExpression(RexNode node) {
+    return Boolean.TRUE.equals(node.accept(new OffsetFetchExpressionVisitor()));
+  }
+
+  /** Visitor that validates OFFSET and FETCH expressions. */
+  private static class OffsetFetchExpressionVisitor
+      extends RexVisitorImpl<@Nullable Boolean> {
+    OffsetFetchExpressionVisitor() {
+      super(false);
+    }
+
+    @Override public Boolean visitLiteral(RexLiteral literal) {
+      return true;
+    }
+
+    @Override public Boolean visitDynamicParam(RexDynamicParam dynamicParam) {
+      return true;
+    }
+
+    @Override public Boolean visitCall(RexCall call) {
+      if (call.getOperator().isAggregator()) {
+        return false;
+      }
+      for (RexNode operand : call.getOperands()) {
+        if (!Boolean.TRUE.equals(operand.accept(this))) {
+          return false;
+        }
+      }
+      return true;
+    }
   }
 
   private static RelFieldCollation collation(RexNode node,
@@ -4465,20 +4600,16 @@ public class RelBuilder {
 
   /**
    * Checks for {@link CorrelationId}, then validates the id is not used on left,
-   * and finally checks if id is actually used on right.
+   * and finally checks whether the join should be converted to a {@link Correlate}.
    *
-   * @return true if a correlate id is present and used
+   * @return true if the join should be converted to a Correlate; false if it should remain a Join
    *
-   * @throws IllegalArgumentException if the {@link CorrelationId} is used by left side or if the a
-   *   {@link CorrelationId} is present and the {@link JoinRelType} is FULL or RIGHT.
+   * @throws IllegalArgumentException if the {@link CorrelationId} is used by left side
    */
   private boolean checkIfCorrelated(Set<CorrelationId> variablesSet,
       JoinRelType joinType, RelNode leftNode, RelNode rightRel) {
     if (variablesSet.size() != 1) {
       return false;
-    }
-    if (!config.convertCorrelateToJoin()) {
-      return true;
     }
     CorrelationId id = Iterables.getOnlyElement(variablesSet);
     if (!RelOptUtil.notContainsCorrelation(leftNode, id, Litmus.IGNORE)) {
@@ -4490,12 +4621,14 @@ public class RelBuilder {
     case ASOF:
     case RIGHT:
     case FULL:
-      throw new IllegalArgumentException("Correlated " + joinType + " join is not supported");
+      return false;
     default:
-      return !RelOptUtil.correlationColumns(
-          Iterables.getOnlyElement(variablesSet),
-          rightRel).isEmpty();
+      break;
     }
+    if (!config.convertCorrelateToJoin()) {
+      return true;
+    }
+    return !RelOptUtil.correlationColumns(id, rightRel).isEmpty();
   }
 
 
@@ -5061,13 +5194,107 @@ public class RelBuilder {
             @Override public boolean hasEmptyGroup() {
               return !SqlWindow.isAlwaysNonEmpty(lowerBound, upperBound);
             }
+
+            @Override public RelDataType getCollationType() {
+              // Inverse distribution functions such as PERCENTILE_CONT/DISC
+              // used as analytic functions ("... WITHIN GROUP (ORDER BY x)
+              // OVER (...)") derive their return type from the sort key.
+              checkArgument(!sortKeys.isEmpty(),
+                  "collation type requested but no sort key present");
+              return sortKeys.get(0).left.getType();
+            }
           };
       final RelDataType type = op.inferReturnType(bind);
+      final RexNode currentRowValue = simplifyZeroOffset(type);
+      if (currentRowValue != null) {
+        return aliasMaybe(currentRowValue, alias);
+      }
+      final ImmutableList<RexNode> newPartitionKeys =
+          simplifyPartitionKeys(partitionKeys);
+      final ImmutableList<RexFieldCollation> newSortKeys =
+          simplifySortKeys(newPartitionKeys, sortKeys);
       final RexNode over = getRexBuilder()
-          .makeOver(pos, type, op, operands, partitionKeys, sortKeys,
+          .makeOver(pos, type, op, operands, newPartitionKeys, newSortKeys,
               lowerBound, upperBound, exclude, rows, allowPartial, nullWhenCountZero,
               distinct, ignoreNulls);
       return aliasMaybe(over, alias);
+    }
+
+    /** Removes constant keys from a window's {@code PARTITION BY}. A constant
+     * partition key places every row in the same partition, so it does not
+     * partition the data and can be dropped. */
+    private ImmutableList<RexNode> simplifyPartitionKeys(
+        List<RexNode> partitionKeys) {
+      final ImmutableList.Builder<RexNode> newKeys = ImmutableList.builder();
+      for (RexNode key : partitionKeys) {
+        if (!RexUtil.isConstant(key)) {
+          newKeys.add(key);
+        }
+      }
+      return newKeys.build();
+    }
+
+    /** Removes redundant keys from a window's {@code ORDER BY}. A sort key is
+     * redundant if it is constant, or if it is functionally determined by the
+     * partition keys and earlier sort keys (those columns are fixed within a
+     * partition, so the key cannot affect the ordering). For example, with
+     * {@code PARTITION BY x, y ORDER BY x + y, z} the key {@code x + y} only
+     * references fixed columns and is dropped, leaving {@code ORDER BY z}. */
+    private ImmutableList<RexFieldCollation> simplifySortKeys(
+        List<RexNode> partitionKeys, List<RexFieldCollation> sortKeys) {
+      // A RANGE frame with a value offset (e.g. RANGE BETWEEN 5 PRECEDING)
+      // derives its bounds from the sort key values, so its keys must be kept.
+      if (!rows
+          && (lowerBound.getOffset() != null || upperBound.getOffset() != null)) {
+        return ImmutableList.copyOf(sortKeys);
+      }
+      // Columns whose value is fixed within a partition: partition keys plus
+      // columns pinned by an earlier single-column sort keys.
+      ImmutableBitSet fixedColumns = ImmutableBitSet.of();
+      for (RexNode key : partitionKeys) {
+        if (key instanceof RexInputRef) {
+          fixedColumns = fixedColumns.set(((RexInputRef) key).getIndex());
+        }
+      }
+      final ImmutableList.Builder<RexFieldCollation> newSortKeys =
+          ImmutableList.builder();
+      for (RexFieldCollation collation : sortKeys) {
+        final RexNode key = collation.left;
+        if (RexUtil.isConstant(key)) {
+          continue;
+        }
+        final ImmutableBitSet keyColumns = RelOptUtil.InputFinder.bits(key);
+        if (!keyColumns.isEmpty()
+            && RexUtil.isDeterministic(key)
+            && fixedColumns.contains(keyColumns)) {
+          continue;
+        }
+        newSortKeys.add(collation);
+        if (key instanceof RexInputRef) {
+          fixedColumns = fixedColumns.set(((RexInputRef) key).getIndex());
+        }
+      }
+      return newSortKeys.build();
+    }
+
+    /** Replaces {@code LAG(x, 0)} and {@code LEAD(x, 0)}, with or without a
+     * default, by {@code x}. Returns null if the call cannot be replaced. */
+    private @Nullable RexNode simplifyZeroOffset(RelDataType type) {
+      if (op.getKind() != SqlKind.LAG && op.getKind() != SqlKind.LEAD) {
+        return null;
+      }
+      // Check if the offset is 0; (the default offset is 1)
+      if (operands.size() < 2
+          || !RexSimplify.checkLiteralValue(operands.get(1), BigDecimal.ZERO)) {
+        return null;
+      }
+      final RexNode value = operands.get(0);
+      // The result must be nullable
+      if (!type.isNullable() && value.getType().isNullable()) {
+        return null;
+      }
+      // Preserve the type of the call
+      return getRexBuilder().ensureType(pos, type, value, false);
     }
   }
 
@@ -5187,6 +5414,62 @@ public class RelBuilder {
     }
   }
 
+  /** Stack of {@link Frame}s.
+   *
+   * <p>Extends {@link AbstractQueue} so that it is a {@link Queue}, but also
+   * provides the {@code push}, {@code pop} and {@code peek} methods of
+   * {@link Deque}, so that callers can treat it as a stack.
+   *
+   * <p>When a frame is pushed, its relational expression is checked: an
+   * {@link IllegalArgumentException} is thrown if its row type is empty and
+   * {@link Config#emptyRowTypePolicy()} is
+   * {@link EmptyRowTypePolicy#FORBIDDEN}.
+   */
+  private class FrameStack extends AbstractQueue<Frame> {
+    final Deque<Frame> deque = new ArrayDeque<>();
+
+    @Override public Iterator<Frame> iterator() {
+      return deque.iterator();
+    }
+
+    @Override public int size() {
+      return deque.size();
+    }
+
+    @Override public boolean offer(Frame frame) {
+      checkEmptyRowType(castNonNull(config), frame.rel);
+      deque.push(frame);
+      return true;
+    }
+
+    @Override public @Nullable Frame poll() {
+      return deque.pollFirst();
+    }
+
+    /** Pushes a frame onto the top of the stack. */
+    public void push(Frame frame) {
+      offer(frame);
+    }
+
+    /** Pops the frame at the top of the stack.
+     *
+     * <p>Throws {@link java.util.NoSuchElementException} if the stack is
+     * empty. */
+    public Frame pop() {
+      return deque.pop();
+    }
+
+    /** Returns the frame at the top of the stack, or null if the stack is
+     * empty. */
+    @Override public @Nullable Frame peek() {
+      return deque.peekFirst();
+    }
+
+    @Override public void clear() {
+      deque.clear();
+    }
+  }
+
   /** Shuttle that shifts a predicate's inputs to the left, replacing early
    * ones with references to a
    * {@link RexCorrelVariable}. */
@@ -5295,6 +5578,23 @@ public class RelBuilder {
 
     /** Sets {@link #preventEmptyFieldList()}. */
     Config withPreventEmptyFieldList(boolean preventEmptyFieldList);
+
+    /** The policy that determines whether relational expressions may have an
+     * empty row type (a row type with zero fields); default
+     * {@link EmptyRowTypePolicy#DISCOURAGED}.
+     *
+     * <p>If the policy is {@link EmptyRowTypePolicy#FORBIDDEN}, methods throw
+     * an {@link IllegalArgumentException} if they create or are given a
+     * relational expression whose row type is empty.
+     *
+     * @see EmptyRowTypePolicy
+     */
+    @Value.Default default EmptyRowTypePolicy emptyRowTypePolicy() {
+      return EmptyRowTypePolicy.DISCOURAGED;
+    }
+
+    /** Sets {@link #emptyRowTypePolicy()}. */
+    Config withEmptyRowTypePolicy(EmptyRowTypePolicy emptyRowTypePolicy);
 
     /** Whether to push down join conditions; default false (but
      * {@link SqlToRelConverter#config()} by default sets this to true). */

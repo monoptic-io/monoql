@@ -61,6 +61,7 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexCorrelVariable;
 import org.apache.calcite.rex.RexFieldAccess;
 import org.apache.calcite.rex.RexInputRef;
+import org.apache.calcite.rex.RexLambdaRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexLocalRef;
 import org.apache.calcite.rex.RexNode;
@@ -113,32 +114,44 @@ import static java.util.Objects.requireNonNull;
  * normal optimizer rules. This approach has the benefit that real optimizer and
  * codegen rules never have to deal with structured types.
  *
- * <p>As an example, suppose we have a structured type <code>ST(A1 smallint, A2
- * bigint)</code>, a table <code>T(c1 ST, c2 double)</code>, and a query <code>
- * select t.c2, t.c1.a2 from t</code>. After SqlToRelConverter executes, the
- * unflattened tree looks like:
+ * <p>As an example, take the query
  *
  * <blockquote><pre><code>
- * LogicalProject(C2=[$1], A2=[$0.A2])
- *   LogicalTableScan(table=[T])
+ * select t.s from
+ *   (select ROW(1, 2) as r, 'a' as s from (values (0))) as t
+ * where t.r."EXPR$0" = 1
+ * </code></pre></blockquote>
+ *
+ * <p>After SqlToRelConverter executes, the unflattened tree looks like:
+ *
+ * <blockquote><pre><code>
+ * LogicalProject(S=[$1])
+ *   LogicalFilter(condition=[=($0.EXPR$0, 1)])
+ *     LogicalProject(R=[ROW(1, 2)], S=['a'])
+ *       LogicalValues(tuples=[[{ 0 }]])
  * </code></pre></blockquote>
  *
  * <p>After flattening, the resulting tree looks like
  *
  * <blockquote><pre><code>
- * LogicalProject(C2=[$3], A2=[$2])
- *   FtrsIndexScanRel(table=[T], index=[clustered])
+ * LogicalProject(S=[$2])
+ *   LogicalFilter(condition=[=($0, 1)])
+ *     LogicalValues(tuples=[[{ 1, 2, 'a' }]])
  * </code></pre></blockquote>
  *
- * <p>The index scan produces a flattened row type <code>(boolean, smallint,
- * bigint, double)</code> (the boolean is a null indicator for c1), and the
- * projection picks out the desired attributes (omitting <code>$0</code> and
- * <code>$1</code> altogether). After optimization, the projection might be
- * pushed down into the index scan, resulting in a final tree like
+ * <p>The column <code>R</code> of type <code>ROW(INTEGER, INTEGER)</code> has
+ * become two columns of type <code>INTEGER</code>, the field access
+ * <code>$0.EXPR$0</code> has become the reference <code>$0</code>, and the
+ * references of the outer projection have been renumbered.
  *
- * <blockquote><pre><code>
- * FtrsIndexScanRel(table=[T], index=[clustered], projection=[3, 2])
- * </code></pre></blockquote>
+ * <p>WARNING: this rewrite does not modify collection element types.
+ *
+ * <p>This rewrite does not alter the signature of a user-defined function
+ * or lambda expressions.  Currently all SQL functions that take lambda
+ * expressions as arguments (e.g., <code>EXIST(a, e -&gt; e &gt; 1)</code>) apply these lambda
+ * expressions to collection elements, whose types are not rewritten.
+ * But this rewrite may not be correct in the future if other kinds of
+ * higher-order functions are introduced.
  */
 public class RelStructuredTypeFlattener implements ReflectiveVisitor {
   //~ Instance fields --------------------------------------------------------
@@ -184,23 +197,24 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
   public void updateRelInMap(
       SortedSetMultimap<RelNode, CorrelationId> mapRefRelToCorVar) {
     for (RelNode rel : Lists.newArrayList(mapRefRelToCorVar.keySet())) {
-      if (oldToNewRelMap.containsKey(rel)) {
+      RelNode newRel = oldToNewRelMap.get(rel);
+      if (newRel != null) {
         SortedSet<CorrelationId> corVarSet =
             mapRefRelToCorVar.removeAll(rel);
-        mapRefRelToCorVar.putAll(oldToNewRelMap.get(rel), corVarSet);
+        mapRefRelToCorVar.putAll(newRel, corVarSet);
       }
     }
   }
 
-  @SuppressWarnings({"JdkObsolete", "ModifyCollectionInEnhancedForLoop"})
+  @SuppressWarnings("JdkObsolete")
   public void updateRelInMap(
       SortedMap<CorrelationId, LogicalCorrelate> mapCorVarToCorRel) {
-    for (CorrelationId corVar : mapCorVarToCorRel.keySet()) {
-      LogicalCorrelate oldRel = mapCorVarToCorRel.get(corVar);
-      if (oldToNewRelMap.containsKey(oldRel)) {
-        RelNode newRel = oldToNewRelMap.get(oldRel);
+    for (Map.Entry<CorrelationId, LogicalCorrelate> entry
+        : mapCorVarToCorRel.entrySet()) {
+      RelNode newRel = oldToNewRelMap.get(entry.getValue());
+      if (newRel != null) {
         assert newRel instanceof LogicalCorrelate;
-        mapCorVarToCorRel.put(corVar, (LogicalCorrelate) newRel);
+        entry.setValue((LogicalCorrelate) newRel);
       }
     }
   }
@@ -513,11 +527,41 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
   }
 
   public void rewriteRel(Collect rel) {
-    rewriteGeneric(rel);
+    // Flattening does not rewrite collection element types
+    final RelNode newInput =
+        tryRestructure(rel.getInput(), getNewForOldRel(rel.getInput()));
+    setNewForOldRel(rel, rel.copy(rel.getTraitSet(), newInput));
   }
 
   public void rewriteRel(Uncollect rel) {
-    rewriteGeneric(rel);
+    // Remap passthrough and collection field indices through the flattened
+    // input: a struct passthrough field expands to the range of its flattened
+    // columns; collection fields keep width 1 (flattening never expands
+    // collection types) but their positions may shift.
+    final List<RelDataTypeField> oldFields = rel.getInput().getRowType().getFieldList();
+    final ImmutableBitSet.Builder passthrough = ImmutableBitSet.builder();
+    for (int pos : rel.getPassthroughFieldIndices()) {
+      final int newPos = getNewForOldInput(pos);
+      final int size = postFlattenSize(oldFields.get(pos).getType());
+      for (int i = 0; i < size; i++) {
+        passthrough.set(newPos + i);
+      }
+    }
+    final ImmutableBitSet.Builder collections = ImmutableBitSet.builder();
+    for (int pos : rel.getCollectionFieldIndices()) {
+      collections.set(getNewForOldInput(pos));
+    }
+    final Uncollect newRel =
+        new Uncollect(rel.getCluster(), rel.getTraitSet(),
+            getNewForOldRel(rel.getInput()), rel.withOrdinality,
+            rel.getItemAliases(), passthrough.build(), collections.build(),
+            rel.expandStructFields, rel.isOuter);
+    // Flattening does not change collection element types, so the elements
+    // can produce struct columns; flatten them too
+    final RelNode flatRel = SqlTypeUtil.isFlat(newRel.getRowType())
+        ? newRel
+        : coverNewRelByFlatteningProjection(newRel, newRel);
+    setNewForOldRel(rel, flatRel);
   }
 
   public void rewriteRel(LogicalIntersect rel) {
@@ -754,6 +798,8 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
           flattenResultTypeOfRexCall(newExp, fieldName, flattenedExps);
         }
       } else {
+        // TODO: nested ROW types are not flattened correctly; e.g., a field
+        // access that returns a ROW, such as "t.r.f" where "f" is a ROW
         throw Util.needToImplement(exp);
       }
     } else {
@@ -967,6 +1013,18 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
           // a struct type.
           RexCall call = (RexCall) refExp;
           RexNode newRefExp = visitCall(call);
+          for (Integer ord : accessOrdinals) {
+            newRefExp = rexBuilder.makeFieldAccess(newRefExp, ord);
+          }
+          return newRefExp;
+        } else if (refExp instanceof RexLambdaRef) {
+          // refExp references a parameter of an enclosing RexLambda, e.g.
+          // X in "(X) -> X.EXPR$1". Such a parameter is typed from the
+          // element type of a collection operand of the call, which
+          // flattening leaves as it is, so the access path is kept. A
+          // parameter typed from something that flattening does rewrite
+          // would need the access path to be re-addressed.
+          RexNode newRefExp = refExp;
           for (Integer ord : accessOrdinals) {
             newRefExp = rexBuilder.makeFieldAccess(newRefExp, ord);
           }

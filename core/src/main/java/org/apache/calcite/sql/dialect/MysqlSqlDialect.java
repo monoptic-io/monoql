@@ -126,6 +126,16 @@ public class MysqlSqlDialect extends SqlDialect {
     return false;
   }
 
+  @Override public void quoteStringLiteral(StringBuilder buf,
+      @Nullable String charsetName, String val) {
+    // MySQL treats backslash as an escape character inside string literals,
+    // so a literal backslash must be doubled before the base method escapes the
+    // enclosing quote as \'. Otherwise a value containing a backslash (e.g.
+    // "x\" or "\'; ...") terminates the literal early and the trailing text is
+    // parsed as SQL rather than data.
+    super.quoteStringLiteral(buf, charsetName, escapeBackslash(val));
+  }
+
   @Override public boolean requiresAliasForFromItems() {
     return true;
   }
@@ -137,7 +147,15 @@ public class MysqlSqlDialect extends SqlDialect {
 
   @Override public void unparseOffsetFetch(SqlWriter writer, @Nullable SqlNode offset,
       @Nullable SqlNode fetch) {
-    unparseFetchUsingLimit(writer, offset, fetch);
+    if (offset != null && fetch == null) {
+      // MySQL has no OFFSET-only syntax. Its documented unlimited-row form
+      // uses the maximum unsigned BIGINT value as LIMIT.
+      final SqlNode unlimited =
+          SqlLiteral.createExactNumeric("18446744073709551615", SqlParserPos.ZERO);
+      unparseFetchUsingLimit(writer, offset, unlimited);
+    } else {
+      unparseFetchUsingLimit(writer, offset, fetch);
+    }
   }
 
   @Override public @Nullable SqlNode emulateNullDirection(SqlNode node,

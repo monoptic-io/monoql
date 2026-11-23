@@ -26,6 +26,7 @@ import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.SingleRel;
 import org.apache.calcite.rel.core.Aggregate;
+import org.apache.calcite.rel.core.Calc;
 import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Intersect;
@@ -41,7 +42,6 @@ import org.apache.calcite.rel.core.Window;
 import org.apache.calcite.rel.logical.LogicalValues;
 import org.apache.calcite.rel.metadata.RelMdUtil;
 import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.tools.RelBuilder;
@@ -191,6 +191,19 @@ public abstract class PruneEmptyRules {
    */
   public static final RelOptRule FILTER_INSTANCE =
       RemoveEmptySingleRule.RemoveEmptySingleRuleConfig.FILTER.toRule();
+
+  /**
+   * Rule that converts a {@link org.apache.calcite.rel.core.Calc}
+   * to empty if its child is empty.
+   *
+   * <p>Examples:
+   *
+   * <ul>
+   * <li>Calc(Empty) becomes Empty
+   * </ul>
+   */
+  public static final RelOptRule CALC_INSTANCE =
+      RemoveEmptySingleRule.RemoveEmptySingleRuleConfig.CALC.toRule();
 
   /**
    * Rule that converts a {@link org.apache.calcite.rel.core.Sort}
@@ -374,12 +387,15 @@ public abstract class PruneEmptyRules {
       RemoveEmptySingleRuleConfig FILTER = ImmutableRemoveEmptySingleRuleConfig.of()
           .withDescription("PruneEmptyFilter")
           .withOperandFor(Filter.class, singleRel -> true);
+      RemoveEmptySingleRuleConfig CALC = ImmutableRemoveEmptySingleRuleConfig.of()
+          .withDescription("PruneEmptyCalc")
+          .withOperandFor(Calc.class, singleRel -> true);
       RemoveEmptySingleRuleConfig SORT = ImmutableRemoveEmptySingleRuleConfig.of()
           .withDescription("PruneEmptySort")
           .withOperandFor(Sort.class, singleRel -> true);
       RemoveEmptySingleRuleConfig AGGREGATE = ImmutableRemoveEmptySingleRuleConfig.of()
           .withDescription("PruneEmptyAggregate")
-          .withOperandFor(Aggregate.class, Aggregate::isNotGrandTotal);
+          .withOperandFor(Aggregate.class, aggregate -> !aggregate.hasEmptyGroup());
       RemoveEmptySingleRuleConfig WINDOW = ImmutableRemoveEmptySingleRuleConfig.of()
           .withDescription("PruneEmptyWindow")
           .withOperandFor(Window.class, singleRel -> true);
@@ -519,9 +535,8 @@ public abstract class PruneEmptyRules {
       return new RemoveEmptySingleRule(this) {
         @Override public boolean matches(final RelOptRuleCall call) {
           Sort sort = call.rel(0);
-          return sort.fetch != null
-              && !(sort.fetch instanceof RexDynamicParam)
-              && RexLiteral.bigDecimalValue(sort.fetch).equals(BigDecimal.ZERO);
+          return sort.fetch instanceof RexLiteral
+              && BigDecimal.ZERO.equals(RexLiteral.bigDecimalValue(sort.fetch));
         }
       };
     }

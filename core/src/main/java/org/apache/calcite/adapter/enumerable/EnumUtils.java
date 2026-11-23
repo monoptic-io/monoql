@@ -55,7 +55,6 @@ import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexProgramBuilder;
 import org.apache.calcite.runtime.PairList;
-import org.apache.calcite.runtime.SortedMultiMap;
 import org.apache.calcite.runtime.SqlFunctions;
 import org.apache.calcite.runtime.Utilities;
 import org.apache.calcite.sql.SqlCollation;
@@ -72,6 +71,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.Time;
@@ -86,7 +86,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.TimeZone;
+import java.util.TreeMap;
 import java.util.function.Function;
 
 import static org.apache.calcite.config.CalciteSystemProperty.JOIN_SELECTOR_COMPACT_CODE_THRESHOLD;
@@ -111,6 +113,42 @@ public class EnumUtils {
 
   public static final List<String> LEFT_RIGHT =
       ImmutableList.of("left", "right");
+
+  /** Converts a FETCH or OFFSET runtime value to {@link BigDecimal}.
+   *
+   * <p>The value must be numeric and non-negative. */
+  public static BigDecimal numberToBigDecimal(@Nullable Object value, String kind) {
+    return numberToBigDecimal(value, kind, FetchOffsetRoundingPolicy.NONE);
+  }
+
+  /** Converts a FETCH or OFFSET runtime value to {@link BigDecimal}.
+   *
+   * <p>The value must be numeric and non-negative. The result is adjusted by
+   * the configured rounding policy. */
+  public static BigDecimal numberToBigDecimal(@Nullable Object value, String kind,
+      FetchOffsetRoundingPolicy roundingPolicy) {
+    if (value == null) {
+      throw new IllegalArgumentException(kind + " expression evaluated to NULL");
+    }
+    if (!(value instanceof Number)) {
+      throw new IllegalArgumentException(kind + " must be a number");
+    }
+    final Number number = (Number) value;
+    final BigDecimal decimal;
+    if (number instanceof BigDecimal) {
+      decimal = (BigDecimal) number;
+    } else if (number instanceof BigInteger) {
+      decimal = new BigDecimal((BigInteger) number);
+    } else if (number instanceof Float || number instanceof Double) {
+      decimal = BigDecimal.valueOf(number.doubleValue());
+    } else {
+      decimal = BigDecimal.valueOf(number.longValue());
+    }
+    if (decimal.signum() < 0) {
+      throw new IllegalArgumentException(kind + " must not be negative");
+    }
+    return roundingPolicy.round(decimal);
+  }
 
   /** Declares a method that overrides another method. */
   public static MethodDeclaration overridingMethodDecl(Method method,
@@ -464,6 +502,7 @@ public class EnumUtils {
       if (toPrimitive != null) {
         switch (toPrimitive) {
         case CHAR:
+        case BYTE:
         case SHORT:
         case INT:
         case LONG:
@@ -500,6 +539,15 @@ public class EnumUtils {
               operand);
         }
       }
+    }
+    if (toType == Number.class
+        && (fromType == Object.class || fromType == String.class)) {
+      // E.g. from "Object" to "Number".
+      // Generate "x == null ? null : SqlFunctions.toBigDecimal(x)".
+      return Expressions.condition(
+          Expressions.equal(operand, RexImpTable.NULL_EXPR),
+          RexImpTable.NULL_EXPR,
+          Expressions.call(SqlFunctions.class, "toBigDecimal", operand));
     }
     if (toPrimitive != null) {
       if (fromPrimitive != null) {
@@ -966,9 +1014,11 @@ public class EnumUtils {
       boolean nullable) {
     final BlockBuilder builder = new BlockBuilder();
     final ParameterExpression left_ =
-        Expressions.parameter(leftPhysType.getJavaRowType(), "left");
+        Expressions.parameter(Modifier.FINAL,
+            leftPhysType.getJavaRowType(), "left");
     final ParameterExpression right_ =
-        Expressions.parameter(rightPhysType.getJavaRowType(), "right");
+        Expressions.parameter(Modifier.FINAL,
+            rightPhysType.getJavaRowType(), "right");
     final RexProgramBuilder program =
         new RexProgramBuilder(
             implementor.getTypeFactory().builder()
@@ -987,7 +1037,7 @@ public class EnumUtils {
                         right_, rightPhysType)),
                 implementor.allCorrelateVariables,
                 implementor.getConformance(),
-                nullable)));
+                nullable, implementor.getRexImplementorTable())));
     Class clazz = nullable ? NullablePredicate2.class : Predicate2.class;
     return Expressions.lambda(clazz, builder.toBlock(), left_, right_);
   }
@@ -1002,7 +1052,7 @@ public class EnumUtils {
   static Expression tumblingWindowSelector(
       PhysType inputPhysType,
       PhysType outputPhysType,
-      Expression wmColExpr,
+      int wmColIndex,
       Expression windowSizeExpr,
       Expression offsetExpr) {
     // Generate all fields.
@@ -1019,6 +1069,9 @@ public class EnumUtils {
               outputPhysType.getJavaFieldType(expressions.size()));
       expressions.add(expression);
     }
+    final Expression wmColExpr =
+        inputPhysType.fieldReference(parameter, wmColIndex,
+            outputPhysType.getJavaFieldType(fieldCount));
     final Expression wmColExprToLong = EnumUtils.convert(wmColExpr, long.class);
 
     // Find the fixed window for a timestamp given a window size and an offset, and return the
@@ -1040,24 +1093,56 @@ public class EnumUtils {
 
     expressions.add(windowEndExpr);
 
-    return Expressions.lambda(Function1.class,
-        outputPhysType.record(expressions), parameter);
+    Expression body = outputPhysType.record(expressions);
+    if (inputPhysType.getRowType().getFieldList().get(wmColIndex).getType()
+        .isNullable()) {
+      // A row whose timestamp is NULL belongs to no window, since window_start
+      // and window_end are declared NOT NULL.  Return null for such a row
+      body =
+          Expressions.condition(
+              Expressions.equal(
+                  inputPhysType.fieldReference(parameter, wmColIndex),
+                  Expressions.constant(null)),
+              Expressions.constant(null, body.getType()),
+              body);
+    }
+    return Expressions.lambda(Function1.class, body, parameter);
   }
 
   /**
    * Creates enumerable implementation that applies sessionization to elements from the input
    * enumerator based on a specified key. Elements are windowed into sessions separated by
    * periods with no input for at least the duration specified by gap parameter.
+   *
+   * <p>The key is optional: pass -1 for {@code indexOfKeyColumn} to place every
+   * element on a single session timeline.
    */
   public static Enumerable<@Nullable Object[]> sessionize(
       Enumerator<@Nullable Object[]> inputEnumerator,
       int indexOfWatermarkedColumn, int indexOfKeyColumn, long gap) {
-    return new AbstractEnumerable<@Nullable Object[]>() {
-      @Override public Enumerator<@Nullable Object[]> enumerator() {
-        return new SessionizationEnumerator(inputEnumerator,
-            indexOfWatermarkedColumn, indexOfKeyColumn, gap);
-      }
-    };
+    return new SessionizeEnumerable(inputEnumerator, indexOfWatermarkedColumn, indexOfKeyColumn,
+        gap);
+  }
+
+  /** Enumerable for {@link #sessionize(Enumerator, int, int, long)}. */
+  private static class SessionizeEnumerable extends AbstractEnumerable<@Nullable Object[]> {
+    private final Enumerator<@Nullable Object[]> inputEnumerator;
+    private final int indexOfWatermarkedColumn;
+    private final int indexOfKeyColumn;
+    private final long gap;
+
+    SessionizeEnumerable(Enumerator<@Nullable Object[]> inputEnumerator,
+        int indexOfWatermarkedColumn, int indexOfKeyColumn, long gap) {
+      this.inputEnumerator = inputEnumerator;
+      this.indexOfWatermarkedColumn = indexOfWatermarkedColumn;
+      this.indexOfKeyColumn = indexOfKeyColumn;
+      this.gap = gap;
+    }
+
+    @Override public Enumerator<@Nullable Object[]> enumerator() {
+      return new SessionizationEnumerator(inputEnumerator,
+          indexOfWatermarkedColumn, indexOfKeyColumn, gap);
+    }
   }
 
   /** Enumerator that converts rows into sessions separated by gaps. */
@@ -1075,7 +1160,9 @@ public class EnumUtils {
      *
      * @param inputEnumerator the enumerator to provide an array of objects as input
      * @param indexOfWatermarkedColumn the index of timestamp column upon which a watermark is built
-     * @param indexOfKeyColumn the index of column that acts as grouping key
+     * @param indexOfKeyColumn the index of column that acts as grouping key,
+     *                         or -1 if there is no key and all rows belong to
+     *                         a single session timeline
      * @param gap gap parameter
      */
     SessionizationEnumerator(Enumerator<@Nullable Object[]> inputEnumerator,
@@ -1089,15 +1176,22 @@ public class EnumUtils {
     }
 
     @Override public @Nullable Object[] current() {
-      if (!initialized) {
-        initialize();
-        initialized = true;
-      }
       return list.removeFirst();
     }
 
     @Override public boolean moveNext() {
-      return initialized ? !list.isEmpty() : inputEnumerator.moveNext();
+      // Sessionization needs to see all the input, so the first call consumes
+      // it entirely.  Initializing here rather than in current() lets this
+      // method report that there is nothing to return, which happens when
+      // every row was discarded for having a NULL timestamp.
+      if (!initialized) {
+        initialized = true;
+        if (!inputEnumerator.moveNext()) {
+          return false;
+        }
+        initialize();
+      }
+      return !list.isEmpty();
     }
 
     @Override public void reset() {
@@ -1122,21 +1216,29 @@ public class EnumUtils {
         elements.add(inputEnumerator.current());
       }
 
-      Map<@Nullable Object, SortedMultiMap<Pair<Long, Long>, @Nullable Object[]>> sessionKeyMap =
-          new HashMap<>();
+      // The windows of each key are kept sorted by start time; the merge
+      // below only compares a window with the one that precedes it.
+      Map<@Nullable Object, NavigableMap<Pair<Long, Long>, List<@Nullable Object[]>>>
+          sessionKeyMap = new HashMap<>();
       for (@Nullable Object[] element : elements) {
-        SortedMultiMap<Pair<Long, Long>, @Nullable Object[]> session =
-            sessionKeyMap.computeIfAbsent(element[indexOfKeyColumn], k -> new SortedMultiMap<>());
+        if (element[indexOfWatermarkedColumn] == null) {
+          continue;
+        }
+        // A key column index of -1 means that there is no key; every element
+        // then maps to the same (null) key, forming one session timeline.
+        Object key = indexOfKeyColumn < 0 ? null : element[indexOfKeyColumn];
         Object watermark =
             requireNonNull(element[indexOfWatermarkedColumn],
                 "element[indexOfWatermarkedColumn]");
+        NavigableMap<Pair<Long, Long>, List<@Nullable Object[]>> session =
+            sessionKeyMap.computeIfAbsent(key, k -> new TreeMap<>());
         Pair<Long, Long> initWindow =
             computeInitWindow(SqlFunctions.toLong(watermark), gap);
-        session.putMulti(initWindow, element);
+        session.computeIfAbsent(initWindow, k -> new ArrayList<>()).add(element);
       }
 
       // merge per key session windows if there is any overlap between windows.
-      for (Map.Entry<@Nullable Object, SortedMultiMap<Pair<Long, Long>, @Nullable Object[]>>
+      for (Map.Entry<@Nullable Object, NavigableMap<Pair<Long, Long>, List<@Nullable Object[]>>>
           perKeyEntry : sessionKeyMap.entrySet()) {
         Map<Pair<Long, Long>, List<@Nullable Object[]>> finalWindowElementsMap = new HashMap<>();
         Pair<Long, Long> currentWindow = null;
@@ -1200,12 +1302,31 @@ public class EnumUtils {
   public static Enumerable<@Nullable Object[]> hopping(
       Enumerator<@Nullable Object[]> inputEnumerator,
       int indexOfWatermarkedColumn, long emitFrequency, long windowSize, long offset) {
-    return new AbstractEnumerable<@Nullable Object[]>() {
-      @Override public Enumerator<@Nullable Object[]> enumerator() {
-        return new HopEnumerator(inputEnumerator,
-            indexOfWatermarkedColumn, emitFrequency, windowSize, offset);
-      }
-    };
+    return new HoppingEnumerable(inputEnumerator, indexOfWatermarkedColumn, emitFrequency,
+        windowSize, offset);
+  }
+
+  /** Enumerable for {@link #hopping(Enumerator, int, long, long, long)}. */
+  private static class HoppingEnumerable extends AbstractEnumerable<@Nullable Object[]> {
+    private final Enumerator<@Nullable Object[]> inputEnumerator;
+    private final int indexOfWatermarkedColumn;
+    private final long emitFrequency;
+    private final long windowSize;
+    private final long offset;
+
+    HoppingEnumerable(Enumerator<@Nullable Object[]> inputEnumerator,
+        int indexOfWatermarkedColumn, long emitFrequency, long windowSize, long offset) {
+      this.inputEnumerator = inputEnumerator;
+      this.indexOfWatermarkedColumn = indexOfWatermarkedColumn;
+      this.emitFrequency = emitFrequency;
+      this.windowSize = windowSize;
+      this.offset = offset;
+    }
+
+    @Override public Enumerator<@Nullable Object[]> enumerator() {
+      return new HopEnumerator(inputEnumerator,
+          indexOfWatermarkedColumn, emitFrequency, windowSize, offset);
+    }
   }
 
   /** Enumerator that computes HOP. */
@@ -1237,13 +1358,22 @@ public class EnumUtils {
     }
 
     @Override public @Nullable Object[] current() {
-      if (!list.isEmpty()) {
-        return takeOne();
-      } else {
+      return takeOne();
+    }
+
+    @Override public boolean moveNext() {
+      // Expand input rows until one of them yields a window.  A row whose
+      // timestamp is NULL belongs to no window, and window_start and
+      // window_end are declared NOT NULL, so such a row is discarded.
+      while (list.isEmpty()) {
+        if (!inputEnumerator.moveNext()) {
+          return false;
+        }
         @Nullable Object[] current = inputEnumerator.current();
-        Object watermark =
-            requireNonNull(current[indexOfWatermarkedColumn],
-                "element[indexOfWatermarkedColumn]");
+        Object watermark = current[indexOfWatermarkedColumn];
+        if (watermark == null) {
+          continue;
+        }
         PairList<Long, Long> windows =
             hopWindows(SqlFunctions.toLong(watermark), emitFrequency,
                 windowSize, offset);
@@ -1254,12 +1384,8 @@ public class EnumUtils {
           curWithWindow[current.length + 1] = right;
           list.offer(curWithWindow);
         });
-        return takeOne();
       }
-    }
-
-    @Override public boolean moveNext() {
-      return !list.isEmpty() || inputEnumerator.moveNext();
+      return true;
     }
 
     @Override public void reset() {
@@ -1297,17 +1423,29 @@ public class EnumUtils {
       Function1<TSource, TResult> outSelector) {
     return new AbstractEnumerable<TResult>() {
       // Applies tumbling on each element from the input enumerator and produces
-      // exactly one element for each input element.
+      // at most one element for each input element.
       @Override public Enumerator<TResult> enumerator() {
         return new Enumerator<TResult>() {
           final Enumerator<TSource> inputs = inputEnumerable.enumerator();
+          @Nullable TResult current;
 
           @Override public TResult current() {
-            return outSelector.apply(inputs.current());
+            return requireNonNull(current, "current");
           }
 
           @Override public boolean moveNext() {
-            return inputs.moveNext();
+            // The selector returns null for a row whose timestamp is NULL:
+            // such a row belongs to no window, and window_start and window_end
+            // are declared NOT NULL, so the row is discarded.
+            while (inputs.moveNext()) {
+              TResult result = outSelector.apply(inputs.current());
+              if (result != null) {
+                current = result;
+                return true;
+              }
+            }
+            current = null;
+            return false;
           }
 
           @Override public void reset() {

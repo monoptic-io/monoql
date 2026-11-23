@@ -146,6 +146,55 @@ EnumerableCalc(expr#0..2=[{inputs}], $f0=[$t1], $f1=[$t2])
           EnumerableValues(tuples=[[{ 10 }, { 10 }, { 20 }, { 30 }, { 30 }, { 50 }, { 50 }, { 60 }, { null }]])
 !plan
 !set planner-rules original
+
+# [CALCITE-7643] AggregateMinMaxToLimitRule drops FILTER condition for filtered MIN/MAX aggregates
+select min(v) filter (where p), max(v) filter (where p)
+from (values (10, false), (100, true), (200, true),
+    (300, false), (cast(null as integer), true)) as t(v, p);
++--------+--------+
+| EXPR$0 | EXPR$1 |
++--------+--------+
+|    100 |    200 |
++--------+--------+
+(1 row)
+
+!ok
+
+EnumerableAggregate(group=[{}], EXPR$0=[MIN($0) FILTER $1], EXPR$1=[MAX($0) FILTER $1])
+  EnumerableValues(tuples=[[{ 10, false }, { 100, true }, { 200, true }, { 300, false }, { null, true }]])
+!plan
+
+!set planner-rules "
++AGGREGATE_MIN_MAX_TO_LIMIT,
+-EnumerableRules.ENUMERABLE_AGGREGATE_RULE,
++PROJECT_SUB_QUERY_TO_CORRELATE"
+select min(v) filter (where p), max(v) filter (where p)
+from (values (10, false), (100, true), (200, true),
+    (300, false), (cast(null as integer), true)) as t(v, p);
++--------+--------+
+| EXPR$0 | EXPR$1 |
++--------+--------+
+|    100 |    200 |
++--------+--------+
+(1 row)
+
+!ok
+
+EnumerableCalc(expr#0..2=[{inputs}], $f0=[$t1], $f1=[$t2])
+  EnumerableNestedLoopJoin(condition=[true], joinType=[left])
+    EnumerableNestedLoopJoin(condition=[true], joinType=[left])
+      EnumerableValues(tuples=[[{ 1 }]])
+      EnumerableCalc(expr#0..1=[{inputs}], V=[$t0])
+        EnumerableLimit(fetch=[1])
+          EnumerableCalc(expr#0..1=[{inputs}], expr#2=[IS NOT NULL($t0)], expr#3=[AND($t1, $t2)], proj#0..1=[{exprs}], $condition=[$t3])
+            EnumerableValues(tuples=[[{ 10, false }, { 100, true }, { 200, true }, { 300, false }, { null, true }]])
+    EnumerableCalc(expr#0..1=[{inputs}], V=[$t0])
+      EnumerableLimit(fetch=[1])
+        EnumerableSort(sort0=[$0], dir0=[DESC])
+          EnumerableCalc(expr#0..1=[{inputs}], expr#2=[IS NOT NULL($t0)], expr#3=[AND($t1, $t2)], proj#0..1=[{exprs}], $condition=[$t3])
+            EnumerableValues(tuples=[[{ 10, false }, { 100, true }, { 200, true }, { 300, false }, { null, true }]])
+!plan
+!set planner-rules original
 !use blank
 
 # Test case for [CALCITE-7501] Assertion error in alias expansion for LEFT JOIN USING
@@ -247,13 +296,13 @@ select a from (values (1.0), (4.0), (null)) as t3 (a);
 
 EnumerableAggregate(group=[{0}])
   EnumerableHashJoin(condition=[IS NOT DISTINCT FROM($0, $1)], joinType=[semi])
-    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], A=[$t1])
+    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
       EnumerableHashJoin(condition=[IS NOT DISTINCT FROM($0, $1)], joinType=[semi])
-        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], A=[$t1])
+        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
           EnumerableValues(tuples=[[{ 1.0 }, { 2.0 }, { 3.0 }, { 4.0 }, { 5.0 }]])
-        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], A=[$t1])
+        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
           EnumerableValues(tuples=[[{ 1 }, { 2 }]])
-    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], A=[$t1])
+    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
       EnumerableValues(tuples=[[{ 1.0 }, { 4.0 }, { null }]])
 !plan
 !set planner-rules original
@@ -302,16 +351,15 @@ select a from (values (1.0), (4.0), (null)) as t3 (a);
 
 !ok
 
-EnumerableCalc(expr#0..1=[{inputs}], expr#2=[CAST($t0):DECIMAL(11, 1)], A=[$t2])
+EnumerableAggregate(group=[{0}])
   EnumerableHashJoin(condition=[=($1, $3)], joinType=[anti])
-    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], proj#0..1=[{exprs}])
-      EnumerableAggregate(group=[{0}])
-        EnumerableNestedLoopJoin(condition=[=(CAST($0):DECIMAL(11, 1) NOT NULL, CAST($1):DECIMAL(11, 1) NOT NULL)], joinType=[anti])
-          EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
-            EnumerableValues(tuples=[[{ 1.0 }, { 2.0 }, { 3.0 }, { 4.0 }, { 5.0 }]])
-          EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
-            EnumerableValues(tuples=[[{ 1 }, { 2 }]])
-    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], A=[$t1], A0=[$t1])
+    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], proj#0..1=[{exprs}])
+      EnumerableNestedLoopJoin(condition=[=(CAST($0):DECIMAL(11, 1) NOT NULL, CAST($1):DECIMAL(11, 1) NOT NULL)], joinType=[anti])
+        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
+          EnumerableValues(tuples=[[{ 1.0 }, { 2.0 }, { 3.0 }, { 4.0 }, { 5.0 }]])
+        EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1])
+          EnumerableValues(tuples=[[{ 1 }, { 2 }]])
+    EnumerableCalc(expr#0=[{inputs}], expr#1=[CAST($t0):DECIMAL(11, 1)], expr#2=[CAST($t0):DECIMAL(11, 1) NOT NULL], A=[$t1], A0=[$t2])
       EnumerableValues(tuples=[[{ 1.0 }, { 4.0 }, { null }]])
 !plan
 !set planner-rules original
@@ -633,6 +681,79 @@ EnumerableCalc(expr#0..3=[{inputs}], expr#4=[0], expr#5=[>($t2, $t4)], expr#6=[>
 |  7934 | MILLER |
 +-------+--------+
 (3 rows)
+
+!ok
+!set planner-rules original
+
+# [CALCITE-7711] Add a rule to convert LEFT or RIGHT OUTER JOIN with IS NULL to ANTI JOIN
+!set planner-rules "
++CoreRules.OUTER_JOIN_TO_ANTI_JOIN"
+select l.id as left_id, r.id as right_id
+from (values (1), (2), (3)) as l(id)
+left join (values (1), (3)) as r(id) on l.id = r.id
+where r.id is null
+order by l.id;
++---------+----------+
+| LEFT_ID | RIGHT_ID |
++---------+----------+
+|       2 |          |
++---------+----------+
+(1 row)
+
+!ok
+EnumerableCalc(expr#0=[{inputs}], expr#1=[null:INTEGER], proj#0..1=[{exprs}])
+  EnumerableMergeJoin(condition=[=($0, $1)], joinType=[anti])
+    EnumerableValues(tuples=[[{ 1 }, { 2 }, { 3 }]])
+    EnumerableValues(tuples=[[{ 1 }, { 3 }]])
+!plan
+
+# RIGHT JOIN keeps the non-commutative join condition after swapping inputs.
+select l.id as left_id, r.id as right_id
+from (values (1), (3), (5)) as l(id)
+right join (values (0), (4), (6)) as r(id) on l.id > r.id
+where l.id is null
+order by r.id;
++---------+----------+
+| LEFT_ID | RIGHT_ID |
++---------+----------+
+|         |        6 |
++---------+----------+
+(1 row)
+
+!ok
+EnumerableCalc(expr#0=[{inputs}], expr#1=[null:INTEGER], ID=[$t1], ID0=[$t0])
+  EnumerableNestedLoopJoin(condition=[>($1, $0)], joinType=[anti])
+    EnumerableValues(tuples=[[{ 0 }, { 4 }, { 6 }]])
+    EnumerableValues(tuples=[[{ 1 }, { 3 }, { 5 }]])
+!plan
+!set planner-rules original
+
+# [CALCITE-7909] ProjectSetOpTransposeRule returns wrong results for EXCEPT ALL and INTERSECT ALL.
+!set planner-rules "
++CoreRules.PROJECT_SET_OP_TRANSPOSE"
+
+select y from (
+select x + 1 as x, y from (values (1, 10)) as a(x, y)
+except all
+select x + 1 as x, y from (values (2, 10)) as b(x, y));
++----+
+| Y  |
++----+
+| 10 |
++----+
+(1 row)
+
+!ok
+
+select y from (
+select x + 1 as x, y from (values (1, 10)) as a(x, y)
+intersect all
+select x + 1 as x, y from (values (2, 10)) as b(x, y));
++---+
+| Y |
++---+
++---+
+(0 rows)
 
 !ok
 !set planner-rules original

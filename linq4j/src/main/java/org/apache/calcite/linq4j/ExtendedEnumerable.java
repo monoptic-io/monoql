@@ -548,6 +548,32 @@ public interface ExtendedEnumerable<TSource> {
   <C extends Collection<? super TSource>> C removeAll(C sink);
 
   /**
+   * Updates rows of {@code sink} based on the contents of this sequence.
+   *
+   * <p>For each element {@code x} of this sequence, {@code sourceKeySelector}
+   * computes a key, and {@code sourceTransform} computes a replacement row.
+   * Then for each element {@code y} of {@code sink}, {@code sinkKeySelector}
+   * computes a key; if it matches a key produced from this sequence, {@code y}
+   * is replaced (in place) with the corresponding replacement row.
+   *
+   * <p>The sink is a {@link List} so that elements can be replaced
+   * in place while preserving order.
+   *
+   * @param sink              List to be updated in place
+   * @param sinkKeySelector   Function that extracts a key from a sink row
+   * @param sourceKeySelector Function that extracts a key from a source row
+   * @param transform         Function that produces the replacement row from a
+   *                          source row
+   * @param <TKey>            Key type
+   * @return Number of rows replaced
+   */
+  <TKey> long update(
+      List<TSource> sink,
+      Function1<TSource, TKey> sinkKeySelector,
+      Function1<TSource, TKey> sourceKeySelector,
+      Function1<TSource, TSource> transform);
+
+  /**
    * Correlates the elements of two sequences based on
    * matching keys. The default equality comparer is used to compare
    * keys.
@@ -1070,6 +1096,12 @@ public interface ExtendedEnumerable<TSource> {
   Enumerable<TSource> skip(int count);
 
   /**
+   * Bypasses a specified number of elements in a
+   * sequence and then returns the remaining elements.
+   */
+  Enumerable<TSource> skip(BigDecimal count);
+
+  /**
    * Bypasses elements in a sequence as long as a
    * specified condition is true and then returns the remaining
    * elements.
@@ -1083,6 +1115,14 @@ public interface ExtendedEnumerable<TSource> {
    * predicate function.
    */
   Enumerable<TSource> skipWhile(Predicate2<TSource, Integer> predicate);
+
+  /**
+   * Bypasses elements in a sequence as long as a
+   * specified condition is true and then returns the remaining
+   * elements. The element's index is used in the logic of the
+   * predicate function.
+   */
+  Enumerable<TSource> skipWhileBigDecimal(Predicate2<TSource, BigDecimal> predicate);
 
   /**
    * Computes the sum of the sequence of Decimal values
@@ -1161,6 +1201,12 @@ public interface ExtendedEnumerable<TSource> {
   Enumerable<TSource> take(int count);
 
   /**
+   * Returns a specified number of contiguous elements
+   * from the start of a sequence.
+   */
+  Enumerable<TSource> take(BigDecimal count);
+
+  /**
    * Returns elements from a sequence as long as a
    * specified condition is true.
    */
@@ -1172,6 +1218,13 @@ public interface ExtendedEnumerable<TSource> {
    * logic of the predicate function.
    */
   Enumerable<TSource> takeWhile(Predicate2<TSource, Integer> predicate);
+
+  /**
+   * Returns elements from a sequence as long as a
+   * specified condition is true. The element's index is used in the
+   * logic of the predicate function.
+   */
+  Enumerable<TSource> takeWhileBigDecimal(Predicate2<TSource, BigDecimal> predicate);
 
   /**
    * Creates a {@code Map<TKey, TValue>} from an

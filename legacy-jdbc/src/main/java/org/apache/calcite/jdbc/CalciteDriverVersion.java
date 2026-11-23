@@ -29,14 +29,14 @@ class CalciteDriverVersion {
   static final DriverVersion INSTANCE =
       new DriverVersion(
           "Calcite JDBC Driver",
-          "1.42.0",
+          "1.43.0",
           "Calcite",
-          "1.42.0",
+          "1.43.0",
           true,
           1,
-          42,
+          43,
           1,
-          42);
+          43);
 
   private CalciteDriverVersion() {
   }

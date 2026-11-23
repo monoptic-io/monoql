@@ -37,6 +37,7 @@ import org.apache.calcite.rel.RelHomogeneousShuttle;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.core.AsofJoin;
 import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.core.Filter;
@@ -70,6 +71,7 @@ import org.apache.calcite.rex.RexFieldAccess;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexOver;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexSubQuery;
 import org.apache.calcite.rex.RexUtil;
@@ -574,8 +576,12 @@ public class RelDecorrelator implements ReflectiveVisitor {
     // Its output does not change the input ordering, so there's no
     // need to call propagateExpr.
 
+    if (isCorVarDefined && !canDecorrelateOffsetFetch(rel)) {
+      return null;
+    }
+
     final RelNode oldInput = rel.getInput();
-    final Frame frame = getInvoke(oldInput, isCorVarDefined, rel, true);
+    final Frame frame = getInvoke(oldInput, isCorVarDefined, rel, parentPropagatesNullValues);
     if (frame == null) {
       // If input has not been rewritten, do not rewrite this rel.
       return null;
@@ -630,6 +636,42 @@ public class RelDecorrelator implements ReflectiveVisitor {
     return register(rel, newSort, frame.oldToNewOutputs, frame.corDefOutputs);
   }
 
+  /** Returns whether an aggregate call gives the same result for no rows
+   * and for one row of NULL values. */
+  private static boolean isCallSameForNoRowsAndNullRow(AggregateCall aggCall) {
+    final SqlAggFunction function = aggCall.getAggregation();
+    switch (function.getKind()) {
+    case SUM:
+    case SUM0:
+    case MIN:
+    case MAX:
+    case AVG:
+    case ANY_VALUE:
+    case SINGLE_VALUE:
+      // Built-in functions that give NULL (SUM0 gives 0) for both
+      return true;
+    case OTHER_FUNCTION:
+      // A user-defined function that skips NULL inputs skips the row of
+      // NULL values, so it sees no rows in both cases
+      return !aggCall.getArgList().isEmpty() && function.skipsNullInputs();
+    default:
+      // Other built-in functions can give different results. COUNT(*)
+      // gives 0 for no rows and 1 for a row. ARRAY_AGG gives an empty array
+      // for no rows, and NULL or [NULL] for a row, depending on whether it
+      // keeps NULL values.
+      return false;
+    }
+  }
+
+  /** Returns whether an Aggregate gives the same result for no input rows
+   * and for one input row of NULL values. An Aggregate with GROUP BY keys
+   * does not: it gives no group for no rows, but one group for a row. */
+  static boolean isSameForNoRowsAndNullRow(Aggregate aggregate) {
+    return aggregate.getGroupSet().isEmpty()
+        && aggregate.getAggCallList().stream()
+            .allMatch(RelDecorrelator::isCallSameForNoRowsAndNullRow);
+  }
+
   public @Nullable Frame decorrelateRel(LogicalAggregate rel, boolean isCorVarDefined,
       boolean parentPropagatesNullValues) {
     return decorrelateRel((Aggregate) rel, isCorVarDefined, parentPropagatesNullValues);
@@ -650,7 +692,17 @@ public class RelDecorrelator implements ReflectiveVisitor {
     assert !cm.mapRefRelToCorRef.containsKey(rel);
 
     final RelNode oldInput = rel.getInput();
-    final Frame frame = getInvoke(oldInput, isCorVarDefined, rel, parentPropagatesNullValues);
+    // This Aggregate is the parent of its input. The input can give no row
+    // in place of a row of NULL values only if this Aggregate gives the
+    // same result for both. Example, for an outer table t:
+    //   SELECT COUNT(*) FROM (SELECT COUNT(*) FROM s
+    //     WHERE s.k = t.k GROUP BY ROLLUP(s.a))
+    // For a row of t that matches no row of s, the () group of ROLLUP
+    // gives one row, so the result is 1, not 0.
+    final boolean aggregatePropagatesNullValues = parentPropagatesNullValues
+        && isSameForNoRowsAndNullRow(rel);
+    final Frame frame =
+        getInvoke(oldInput, isCorVarDefined, rel, aggregatePropagatesNullValues);
     if (frame == null) {
       // If input has not been rewritten, do not rewrite this rel.
       return null;
@@ -674,10 +726,15 @@ public class RelDecorrelator implements ReflectiveVisitor {
     int newPos = 0;
 
     final List<Integer> groupKeyIndices = rel.getGroupSet().asList();
+    // If decorrelation adds no correlation key, keep the constant keys:
+    // GROUP BY TRUE gives no row for an empty input, but GROUP BY ()
+    // gives one row.
+    final boolean keepConstantKeys = frame.corDefOutputs.isEmpty();
     final NavigableMap<Integer, RexLiteral> omittedConstants = new TreeMap<>();
     for (int i = 0; i < oldGroupKeyCount; i++) {
       final int idx = groupKeyIndices.get(i);
-      final RexLiteral constant = projectedLiteral(newInput, idx);
+      final RexLiteral constant =
+          keepConstantKeys ? null : projectedLiteral(newInput, idx);
       if (constant != null) {
         // Exclude constants. Aggregate({true}) occurs because Aggregate({})
         // would generate 1 row even when applied to an empty table.
@@ -848,8 +905,6 @@ public class RelDecorrelator implements ReflectiveVisitor {
       newRel = rewriteScalarAggregate(rel, newRel, outputMap, corDefOutputs);
     }
 
-    // Aggregate does not change input ordering so corVars will be
-    // located at the same position as the input newProject.
     return register(rel, newRel, outputMap, corDefOutputs);
   }
 
@@ -960,16 +1015,6 @@ public class RelDecorrelator implements ReflectiveVisitor {
         requireNonNull(createValueGenerator(corVarList, 0, valueGenCorDefOutputs));
     final int valueGenFieldCount = valueGen.getRowType().getFieldCount();
 
-    final Map<Integer, RexNode> newProjectMap = new HashMap<>();
-    for (Map.Entry<CorDef, Integer> corDefOutput : corDefOutputs.entrySet()) {
-      final CorDef corDef = corDefOutput.getKey();
-      final int leftPos = requireNonNull(valueGenCorDefOutputs.get(corDef));
-      final int rightPos = corDefOutput.getValue();
-      final RelDataType leftType = valueGen.getRowType().getFieldList().get(leftPos).getType();
-      final RexNode leftRef = new RexInputRef(leftPos, leftType);
-      newProjectMap.put(valueGenFieldCount + rightPos, leftRef);
-    }
-
     // Build join conditions
     final List<RexNode> conditions =
         buildCorDefJoinConditions(valueGenCorDefOutputs, corDefOutputs,
@@ -981,36 +1026,39 @@ public class RelDecorrelator implements ReflectiveVisitor {
     // to ensure each corVar's aggregate result is output.
     final RelNode join = relBuilder.push(valueGen).push(newRel)
         .join(JoinRelType.LEFT, joinCond).build();
-    RelDataType joinRowType = join.getRowType();
+    final RelDataType joinRowType = join.getRowType();
+    final PairList<RexNode, String> projects = PairList.of();
 
-    RexBuilder rexBuilder = relBuilder.getRexBuilder();
-    // Here we record the mapping between the original index and the new project.
-    // For the count, we map it as `case when x is null then 0 else x`.
-    for (int i1 = 0; i1 < oldRel.getAggCallList().size(); i1++) {
-      AggregateCall aggCall = oldRel.getAggCallList().get(i1);
-      if (aggCall.getAggregation() instanceof SqlCountAggFunction) {
-        int index = requireNonNull(outputMap.get(i1 + oldRel.getGroupCount()));
-        final RexInputRef ref = RexInputRef.of(index + valueGenFieldCount, joinRowType);
-        ImmutableList<RexNode> exprs =
-            ImmutableList.of(relBuilder.isNotNull(ref), ref, relBuilder.literal(0));
-        RexNode specificCountValue = rexBuilder.makeCall(SqlStdOperatorTable.CASE, exprs);
-        newProjectMap.put(ref.getIndex(), specificCountValue);
-      }
+    // Correlation fields must come from the value generator. Fields that share
+    // an aggregate output can have different values on unmatched outer rows.
+    for (Map.Entry<CorDef, Integer> entry : corDefOutputs.entrySet()) {
+      final int index = requireNonNull(valueGenCorDefOutputs.get(entry.getKey()));
+      final String name = newRel.getRowType().getFieldNames().get(entry.getValue());
+      entry.setValue(projects.size());
+      projects.add(RexInputRef.of(index, joinRowType), name);
     }
 
-    // Build [07] LogicalProject(DEPTNO=[$0], EXPR$0=[CASE(IS NOT NULL($2), $2, 0)])
-    // to handle COUNT function by converting nulls to zero.
-    final List<RexNode> newProjects = new ArrayList<>();
-    for (int index : ImmutableBitSet.range(valueGenFieldCount, joinRowType.getFieldCount())) {
-      if (newProjectMap.containsKey(index)) {
-        newProjects.add(requireNonNull(newProjectMap.get(index)));
-      } else {
-        newProjects.add(RexInputRef.of(index, joinRowType));
+    // Project the original aggregate outputs, preserving COUNT's empty-input
+    // value, and rebuild their positions independently of the correlation fields.
+    final RexBuilder rexBuilder = relBuilder.getRexBuilder();
+    for (RelDataTypeField field : oldRel.getRowType().getFieldList()) {
+      final int index = requireNonNull(outputMap.get(field.getIndex()));
+      final RexInputRef ref = RexInputRef.of(valueGenFieldCount + index, joinRowType);
+      RexNode expression = ref;
+      final int aggIndex = field.getIndex() - oldRel.getGroupCount();
+      if (aggIndex >= 0
+          && oldRel.getAggCallList().get(aggIndex).getAggregation()
+              instanceof SqlCountAggFunction) {
+        final ImmutableList<RexNode> operands =
+            ImmutableList.of(relBuilder.isNotNull(ref), ref, relBuilder.literal(0));
+        expression = rexBuilder.makeCall(SqlStdOperatorTable.CASE, operands);
       }
+      outputMap.put(field.getIndex(), projects.size());
+      projects.add(expression, newRel.getRowType().getFieldNames().get(index));
     }
 
     return relBuilder.push(join)
-        .project(newProjects, newRel.getRowType().getFieldNames())
+        .project(projects.leftList(), projects.rightList())
         .build();
   }
 
@@ -1136,8 +1184,35 @@ public class RelDecorrelator implements ReflectiveVisitor {
     return register(sort, result, mapOldToNewOutputs, corDefOutputs);
   }
 
+  static boolean canDecorrelateOffsetFetch(Sort sort) {
+    final @Nullable RexLiteral offset = sort.offset == null
+        ? null
+        : RexUtil.reduceOffsetToLiteral(sort.getCluster(), sort.offset);
+    final @Nullable RexLiteral fetch = sort.fetch == null
+        ? null
+        : RexUtil.reduceFetchToLiteral(sort.getCluster(), sort.fetch);
+    return (sort.offset == null
+            || offset != null && isNonNegativeIntegralLiteral(offset))
+        && (sort.fetch == null
+            || fetch != null && isNonNegativeIntegralLiteral(fetch));
+  }
+
+  private static boolean isNonNegativeIntegralLiteral(@Nullable RexNode node) {
+    if (node == null) {
+      return true;
+    }
+    if (!(node instanceof RexLiteral)) {
+      return false;
+    }
+    final @Nullable BigDecimal value =
+        ((RexLiteral) node).getValueAs(BigDecimal.class);
+    return value != null
+        && value.signum() >= 0
+        && value.stripTrailingZeros().scale() <= 0;
+  }
+
   protected @Nullable Frame decorrelateSortAsAggregate(Sort sort, final Frame frame) {
-    if (sort.offset != null || sort.fetch == null) {
+    if (sort.offset != null || !(sort.fetch instanceof RexLiteral)) {
       return null;
     }
 
@@ -1619,32 +1694,52 @@ public class RelDecorrelator implements ReflectiveVisitor {
         new TreeMap<>(inputFrame.corDefOutputs);
 
     final Collection<CorRef> corVarList = cm.mapRefRelToCorRef.get(rel);
+    // Track only correlation variables that are not already produced by the
+    // input frame. Existing outputs still need to be carried forward, but they
+    // should not force an extra value generator.
+    final List<CorRef> missingCorVarList = new ArrayList<>();
+    for (CorRef correlation : corVarList) {
+      if (!corDefOutputs.containsKey(correlation.def())) {
+        missingCorVarList.add(correlation);
+      }
+    }
 
-    // Try to populate correlation variables using local fields.
+    // Try to populate missing correlation variables using local fields.
     // This means that we do not need a value generator.
     if (rel instanceof Filter) {
       NavigableMap<CorDef, Integer> map = new TreeMap<>();
       List<RexNode> projects = new ArrayList<>();
-      for (CorRef correlation : corVarList) {
+      for (CorRef correlation : missingCorVarList) {
         final CorDef def = correlation.def();
-        if (corDefOutputs.containsKey(def) || map.containsKey(def)) {
+        if (map.containsKey(def)) {
+          // The same correlation definition may be referenced more than once;
+          // one output slot is enough.
           continue;
         }
         try {
           findCorrelationEquivalent(correlation, ((Filter) rel).getCondition());
         } catch (Util.FoundOne e) {
           Object node = requireNonNull(e.getNode(), "e.getNode()");
-          if (node instanceof RexInputRef) {
-            map.put(def, ((RexInputRef) node).getIndex());
+          // findCorrelationEquivalent returns an expression from the original
+          // Filter condition, so its input refs are still in the pre-decorrelation
+          // coordinate system. Correlation outputs are recorded against the
+          // decorrelated input; translate the expression first, otherwise a
+          // correlated field may be bound to a column with the same ordinal but
+          // different meaning in the new RelNode.
+          final RexNode newNode = node instanceof RexInputRef
+              ? getNewForOldInputRef(rel, this.map, (RexInputRef) node)
+              : decorrelateExpr(rel, this.map, cm, (RexNode) node);
+          if (newNode instanceof RexInputRef) {
+            map.put(def, ((RexInputRef) newNode).getIndex());
           } else {
             map.put(def, inputFrame.r.getRowType().getFieldCount() + projects.size());
-            projects.add((RexNode) node);
+            projects.add(newNode);
           }
         }
       }
-      // If all correlation variables are now satisfied, skip creating a value
-      // generator.
-      if (map.size() == corVarList.size()) {
+      // If all missing correlation variables are now satisfied, skip creating a
+      // value generator.
+      if (map.size() == missingCorVarList.size()) {
         map.putAll(inputFrame.corDefOutputs);
         final RelNode r;
         if (!projects.isEmpty()) {
@@ -1658,7 +1753,10 @@ public class RelDecorrelator implements ReflectiveVisitor {
       }
     }
 
-    return createFrameWithValueGenerator(rel.getInput(0), inputFrame, corVarList, corDefOutputs);
+    // Fall back to a value generator for correlation variables that could not
+    // be derived from local fields.
+    return createFrameWithValueGenerator(rel.getInput(0), inputFrame,
+        missingCorVarList, corDefOutputs);
   }
 
   /**
@@ -1710,21 +1808,29 @@ public class RelDecorrelator implements ReflectiveVisitor {
    * ensuring that we only map the correlation variable to a local field or
    * expression from the current relational expression (e.g., a {@link RexInputRef}),
    * rather than to another correlation variable.
+   *
+   * <p>{@code IS NOT DISTINCT FROM} establishes the same equivalence as
+   * {@code =} (it compares values null-safely), so it is also recognized.
    */
   private static void findCorrelationEquivalent(CorRef correlation, RexNode e)
       throws Util.FoundOne {
     switch (e.getKind()) {
     case EQUALS:
+    case IS_NOT_DISTINCT_FROM:
       final RexCall call = (RexCall) e;
       final List<RexNode> operands = call.getOperands();
-      if (!RexUtil.containsFieldAccess(operands.get(1))
-          && references(operands.get(0), correlation)) {
-        throw new Util.FoundOne(operands.get(1));
-      }
-      if (!RexUtil.containsFieldAccess(operands.get(0))
-          && references(operands.get(1), correlation)) {
-        throw new Util.FoundOne(operands.get(0));
-      }
+      // For IS NOT DISTINCT FROM, binding the correlation to a local operand
+      // is only sound if that operand is NOT NULL. Decorrelation leaves the
+      // original filter in place on the inner side of the join, with the
+      // correlation substituted by its binding, so the filter condition
+      // becomes the residual condition {@code IS NOT DISTINCT FROM(x, x)},
+      // which is always true (hence harmless). The null-safe comparison of
+      // the original condition is instead enforced by the join condition.
+      // If x were nullable, inner rows with x = NULL, which the original
+      // condition accepts when the correlated column is null, would be
+      // rejected by the null-rejecting join condition, changing the result.
+      findEqualityEquivalent(correlation, operands.get(0), operands.get(1),
+          e.getKind() == SqlKind.IS_NOT_DISTINCT_FROM);
       break;
     case AND:
       for (RexNode operand : ((RexCall) e).getOperands()) {
@@ -1733,6 +1839,26 @@ public class RelDecorrelator implements ReflectiveVisitor {
       break;
     default:
       break;
+    }
+  }
+
+  /** If one of {@code operand0} and {@code operand1} references the given
+   * correlation, and the other does not contain any {@link RexFieldAccess},
+   * throws the other operand as a {@link org.apache.calcite.util.Util.FoundOne}.
+   *
+   * <p>If {@code requireNotNullOperand} is true, the non-correlation operand
+   * must additionally be NOT NULL to be accepted. */
+  private static void findEqualityEquivalent(CorRef correlation, RexNode operand0,
+      RexNode operand1, boolean requireNotNullOperand) throws Util.FoundOne {
+    if (!RexUtil.containsFieldAccess(operand1)
+        && references(operand0, correlation)
+        && !(requireNotNullOperand && operand1.getType().isNullable())) {
+      throw new Util.FoundOne(operand1);
+    }
+    if (!RexUtil.containsFieldAccess(operand0)
+        && references(operand1, correlation)
+        && !(requireNotNullOperand && operand0.getType().isNullable())) {
+      throw new Util.FoundOne(operand0);
     }
   }
 
@@ -1863,8 +1989,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
 
     frameStack.push(Pair.of(rel.getCorrelationId(), leftFrame));
     final Frame rightFrame =
-        getInvoke(oldRight, true, rel,
-            rel.getJoinType() == JoinRelType.LEFT || parentPropagatesNullValues);
+        getInvoke(oldRight, true, rel, rel.getJoinType() == JoinRelType.LEFT);
     frameStack.pop();
 
     if (rightFrame == null || rightFrame.corDefOutputs.isEmpty()) {
@@ -1874,6 +1999,26 @@ public class RelDecorrelator implements ReflectiveVisitor {
     assert rel.getRequiredColumns().cardinality()
         <= rightFrame.corDefOutputs.keySet().size();
 
+    // In a LEFT correlate, the right input gives the values of the variables of
+    // enclosing correlates, and they are NULL in the rows that the join pads.
+    // Unless the parent supplies these NULLs again, get the values from the
+    // left input too; the conditions below match the copies.
+    Frame newLeftFrame = leftFrame;
+    if (rel.getJoinType().generatesNullsOnRight()
+        && !parentPropagatesNullValues) {
+      final List<CorRef> outerCorVars = new ArrayList<>();
+      for (CorRef corRef : collectExternalCorVars(oldRight)) {
+        if (!corRef.corr.equals(rel.getCorrelationId())) {
+          outerCorVars.add(corRef);
+        }
+      }
+      if (!outerCorVars.isEmpty()) {
+        newLeftFrame =
+            supplyMissingCorVars(oldLeft, leftFrame, outerCorVars,
+                new TreeMap<>());
+      }
+    }
+
     // Change correlator rel into a join.
     // Join all the correlated variables produced by this correlator rel
     // with the values generated and propagated from the right input
@@ -1881,7 +2026,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
         new TreeMap<>(rightFrame.corDefOutputs);
     final List<RexNode> conditions = new ArrayList<>();
     final List<RelDataTypeField> newLeftOutput =
-        leftFrame.r.getRowType().getFieldList();
+        newLeftFrame.r.getRowType().getFieldList();
     int newLeftFieldCount = newLeftOutput.size();
 
     final List<RelDataTypeField> newRightOutput =
@@ -1893,7 +2038,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
       if (!corDef.corr.equals(rel.getCorrelationId())) {
         continue;
       }
-      final int newLeftPos = requireNonNull(leftFrame.oldToNewOutputs.get(corDef.field));
+      final int newLeftPos = requireNonNull(newLeftFrame.oldToNewOutputs.get(corDef.field));
       final int newRightPos = rightOutput.getValue();
 
       // Using `equals` instead of `IS NOT DISTINCT FROM` is an optimization
@@ -1914,6 +2059,12 @@ public class RelDecorrelator implements ReflectiveVisitor {
       corDefOutputs.remove(corDef);
     }
 
+    // If both inputs propagate the same reference to an enclosing correlate,
+    // the two copies must have the same value.
+    conditions.addAll(
+        buildCorDefJoinConditions(newLeftFrame.corDefOutputs, corDefOutputs,
+            newLeftFrame.r, rightFrame.r, relBuilder));
+
     // Update the output position for the corVars: only pass on the cor
     // vars that are not used in the join key.
     for (Map.Entry<CorDef, Integer> entry : corDefOutputs.entrySet()) {
@@ -1922,7 +2073,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
 
     // then add any corVar from the left input. Do not need to change
     // output positions.
-    corDefOutputs.putAll(leftFrame.corDefOutputs);
+    corDefOutputs.putAll(newLeftFrame.corDefOutputs);
 
     // Create the mapping between the output of the old correlation rel
     // and the new join rel
@@ -1936,7 +2087,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
         == oldLeftFieldCount + oldRightFieldCount;
 
     // Left input positions are not changed.
-    mapOldToNewOutputs.putAll(leftFrame.oldToNewOutputs);
+    mapOldToNewOutputs.putAll(newLeftFrame.oldToNewOutputs);
 
     // Right input positions are shifted by newLeftFieldCount.
     for (int i = 0; i < oldRightFieldCount; i++) {
@@ -1946,7 +2097,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
 
     final RexNode condition =
         RexUtil.composeConjunction(relBuilder.getRexBuilder(), conditions);
-    RelNode newJoin = relBuilder.push(leftFrame.r).push(rightFrame.r)
+    RelNode newJoin = relBuilder.push(newLeftFrame.r).push(rightFrame.r)
         .join(rel.getJoinType(), condition).build();
 
     return register(rel, newJoin, mapOldToNewOutputs, corDefOutputs);
@@ -1981,8 +2132,14 @@ public class RelDecorrelator implements ReflectiveVisitor {
     final RelNode oldLeft = rel.getInput(0);
     final RelNode oldRight = rel.getInput(1);
 
-    final Frame leftFrame = getInvoke(oldLeft, isCorVarDefined, rel, parentPropagatesNullValues);
-    final Frame rightFrame = getInvoke(oldRight, isCorVarDefined, rel, parentPropagatesNullValues);
+    // Decorrelate recursively. Setting parentPropagatesNullValues lets a scalar aggregate return
+    // no row for a corVar value, rather than a row of NULLs. That is safe only for the side of a
+    // LEFT or RIGHT join that generates NULL values, since the join then supplies those NULLs.
+    // FULL does not qualify, because it must output the aggregate's row even when it has no match.
+    final Frame leftFrame =
+        getInvoke(oldLeft, isCorVarDefined, rel, rel.getJoinType() == JoinRelType.RIGHT);
+    final Frame rightFrame =
+        getInvoke(oldRight, isCorVarDefined, rel, rel.getJoinType() == JoinRelType.LEFT);
 
     if (leftFrame == null || rightFrame == null) {
       // If any input has not been rewritten, do not rewrite this rel.
@@ -2023,22 +2180,33 @@ public class RelDecorrelator implements ReflectiveVisitor {
       joinConditions.add(originalCond);
     }
 
-    if (generatesNullsOnLeft || generatesNullsOnRight) {
-      List<RexNode> conds =
-          buildCorDefJoinConditions(leftCorDefOutputs, rightCorDefOutputs,
-              newLeftFrame.r, newRightFrame.r, relBuilder);
-      joinConditions.addAll(conds);
-    }
+    // Decorrelation propagates references to outer columns as columns in the
+    // rewritten inputs. If both join inputs propagate the same reference, add
+    // a condition to ensure that they still represent the same outer value.
+    // This applies to every join type, regardless of whether it generates nulls;
+    // if the inputs have no references in common, no condition is added.
+    joinConditions.addAll(
+        buildCorDefJoinConditions(
+            newLeftFrame.corDefOutputs,
+            newRightFrame.corDefOutputs,
+            newLeftFrame.r,
+            newRightFrame.r,
+            relBuilder));
 
     RexNode finalCondition = joinConditions.isEmpty()
         ? relBuilder.literal(true)
         : RexUtil.composeConjunction(relBuilder.getRexBuilder(), joinConditions);
 
-    RelNode newJoin = relBuilder
-        .push(newLeftFrame.r)
-        .push(newRightFrame.r)
-        .join(rel.getJoinType(), finalCondition, ImmutableSet.of())
-        .build();
+    relBuilder.push(newLeftFrame.r).push(newRightFrame.r);
+    if (rel instanceof AsofJoin) {
+      final RexNode matchCondition =
+          decorrelateExpr(castNonNull(currentRel), map, cm,
+              ((AsofJoin) rel).getMatchCondition());
+      relBuilder.asofJoin(rel.getJoinType(), finalCondition, matchCondition);
+    } else {
+      relBuilder.join(rel.getJoinType(), finalCondition, ImmutableSet.of());
+    }
+    RelNode newJoin = relBuilder.build();
 
     // 4. Handle Full Join Projections (Coalesce)
     NavigableMap<CorDef, Integer> corDefOutputs = new TreeMap<>(newLeftFrame.corDefOutputs);
@@ -2478,6 +2646,57 @@ public class RelDecorrelator implements ReflectiveVisitor {
       return fieldAccess;
     }
 
+    /**
+     * Window operators are decorrelated similarly to aggregates. A correlated
+     * window expression is evaluated once per outer-row binding before
+     * decorrelation; after decorrelation, outer references are represented as
+     * ordinary input fields. Therefore, add those fields to the window partition
+     * keys so that the window function is still evaluated independently for
+     * each outer-row binding.
+     *
+     * <p>Implementation based on: Improving Unnesting of Complex Queries
+     *
+     * <p>3.3 Unnesting Rules
+     * (https://dl.gi.de/server/api/core/bitstreams/c1918e8c-6a87-4da2-930a-bfed289f2388/content)
+     */
+    @Override public RexNode visitOver(RexOver over) {
+      final RexOver newOver = (RexOver) super.visitOver(over);
+      final List<RexNode> partitionKeys = new ArrayList<>(newOver.getWindow().partitionKeys);
+      boolean update = newOver != over;
+      int newInputOutputOffset = 0;
+      for (RelNode input : currentRel.getInputs()) {
+        final Frame frame = map.get(input);
+        if (frame == null) {
+          // Inputs without a decorrelation frame keep their original field layout.
+          newInputOutputOffset += input.getRowType().getFieldCount();
+          continue;
+        }
+        for (Integer newInputPos : frame.corDefOutputs.values()) {
+          // Correlation variables become regular input fields after decorrelation.
+          // Add them to the window partition keys to preserve the original
+          // per-correlate evaluation scope.
+          final RexInputRef ref =
+              new RexInputRef(newInputOutputOffset + newInputPos,
+                  frame.r.getRowType().getFieldList()
+                      .get(newInputPos).getType());
+          if (!partitionKeys.contains(ref)) {
+            partitionKeys.add(ref);
+            update = true;
+          }
+        }
+        newInputOutputOffset += frame.r.getRowType().getFieldCount();
+      }
+      if (!update) {
+        return over;
+      }
+      return currentRel.getCluster().getRexBuilder().makeOver(
+          newOver.getParserPosition(), newOver.getType(), newOver.getAggOperator(),
+          newOver.getOperands(), partitionKeys, newOver.getWindow().orderKeys,
+          newOver.getWindow().getLowerBound(), newOver.getWindow().getUpperBound(),
+          newOver.getWindow().getExclude(), newOver.getWindow().isRows(), true, false,
+          newOver.isDistinct(), newOver.ignoreNulls());
+    }
+
     @Override public RexNode visitInputRef(RexInputRef inputRef) {
       final RexInputRef ref = getNewForOldInputRef(currentRel, map, inputRef);
       if (ref.getIndex() == inputRef.getIndex()
@@ -2618,6 +2837,118 @@ public class RelDecorrelator implements ReflectiveVisitor {
         return createCaseExpression(nullIndicator, null, literal);
       }
       return literal;
+    }
+
+    /**
+     * Decorrelates a window expression ({@link RexOver}) that may reference
+     * correlation variables in its {@code PARTITION BY} / {@code ORDER BY}
+     * keys (or the aggregate arguments).
+     *
+     * <p>For each correlation field reachable from {@code over}, we:
+     * <ol>
+     *   <li>rewrite it to an input reference of the (already decorrelated)
+     *       left-hand side of the surrounding correlate, and</li>
+     *   <li>append that reference to the window's {@code partitionKeys}
+     *       (if not already present), so that the window is evaluated
+     *       independently per outer row group, matching the original
+     *       per-correlated-row semantics.</li>
+     * </ol>
+     *
+     * <p>If the scalar sub-query has been pulled above a LEFT correlate, the
+     * result is wrapped in a {@code CASE} on the null-indicator so that it
+     * stays {@code NULL} when the right side did not match.
+     *
+     * <p>Concrete example. For the SQL:
+     * <pre>{@code
+     * SELECT e.ename,
+     *        (SELECT ROW_NUMBER() OVER (PARTITION BY e.deptno
+     *                                   ORDER BY e.empno, d.deptno)
+     *           FROM dept d WHERE e.deptno = d.deptno) AS rn
+     * FROM   emp e
+     * ORDER BY e.empno
+     * }</pre>
+     *
+     * <p>BEFORE this method (window expression as seen on entry):
+     * <pre>{@code
+     * ROW_NUMBER() OVER (
+     *   PARTITION BY $cor2.DEPTNO
+     *   ORDER BY    $cor2.EMPNO, $0)
+     *   partitionKeys = [$cor2.DEPTNO]
+     *   orderKeys     = [$cor2.EMPNO, $0]
+     * }</pre>
+     *
+     * <p>AFTER this method (with {@code projectPulledAboveLeftCorrelator=true}
+     * and a null-indicator at column {@code $3}; correlation fields are
+     * rewritten to input refs from the outer side and {@code $cor2.EMPNO} is
+     * additionally appended to the partition keys):
+     * <pre>{@code
+     * CASE(IS NULL($3), null:BIGINT,
+     *      CAST(
+     *        ROW_NUMBER() OVER (
+     *          PARTITION BY CASE(IS NULL($3), null:TINYINT,  CAST($2):TINYINT),
+     *                       CASE(IS NULL($3), null:SMALLINT, CAST($0):SMALLINT)
+     *          ORDER BY    CASE(IS NULL($3), null:SMALLINT, CAST($0):SMALLINT),
+     *                       $3)
+     *      ):BIGINT)
+     *   newOver.partitionKeys =
+     *     [CASE(IS NULL($3), null:TINYINT,  CAST($2):TINYINT),
+     *      CASE(IS NULL($3), null:SMALLINT, CAST($0):SMALLINT)]
+     *   newOver.orderKeys     =
+     *     [CASE(IS NULL($3), null:SMALLINT, CAST($0):SMALLINT), $3]
+     * }</pre>
+     *
+     * <p>Note that {@code $cor2.EMPNO} only appeared in the original
+     * {@code ORDER BY}; without appending its decorrelated form to
+     * {@code partitionKeys} the rewritten window would silently widen its
+     * computation scope across outer rows and produce wrong results.
+     */
+    @Override public RexNode visitOver(RexOver over) {
+      // Collect correlation fields that are referenced directly by the window
+      // expression. They need to be added to the window partition keys so that
+      // decorrelation does not widen the window computation scope.
+      final List<RexFieldAccess> correlationFields = new ArrayList<>();
+      over.accept(new RexVisitorImpl<Void>(true) {
+        @Override public Void visitFieldAccess(RexFieldAccess fieldAccess) {
+          if (cm.mapFieldAccessToCorRef.containsKey(fieldAccess)
+              && !correlationFields.contains(fieldAccess)) {
+            correlationFields.add(fieldAccess);
+          }
+          return super.visitFieldAccess(fieldAccess);
+        }
+      });
+
+      RexOver newOver = (RexOver) super.visitOver(over);
+      if (!correlationFields.isEmpty()) {
+        final List<RexNode> partitionKeys = new ArrayList<>(newOver.getWindow().partitionKeys);
+        boolean update = false;
+        for (RexFieldAccess fieldAccess : correlationFields) {
+          // Rewrite the correlation field to its decorrelated input reference,
+          // then use it as an additional partition key for the window.
+          RexNode partitionKey = visitFieldAccess(fieldAccess);
+          if (!partitionKeys.contains(partitionKey)) {
+            partitionKeys.add(partitionKey);
+            update = true;
+          }
+        }
+        if (update) {
+          newOver =
+              (RexOver) rexBuilder.makeOver(newOver.getParserPosition(),
+                  newOver.getType(),
+                  newOver.getAggOperator(), newOver.getOperands(), partitionKeys,
+                  newOver.getWindow().orderKeys,
+                  newOver.getWindow().getLowerBound(),
+                  newOver.getWindow().getUpperBound(),
+                  newOver.getWindow().getExclude(),
+                  newOver.getWindow().isRows(), true, false, newOver.isDistinct(),
+                  newOver.ignoreNulls());
+        }
+      }
+      if (projectPulledAboveLeftCorrelator && (nullIndicator != null)) {
+        // Once a scalar sub-query is pulled above a left correlate, the result
+        // must remain nullable when there is no matching row on the right side.
+        return createCaseExpression(nullIndicator, null, newOver);
+      }
+      return newOver;
     }
 
     @Override public RexNode visitCall(final RexCall call) {
@@ -3853,7 +4184,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
       Aggregate agg = (Aggregate) rel;
       ImmutableBitSet groupSet = agg.getGroupSet();
 
-      if (index >= groupSet.size()) {
+      if (index >= agg.getGroupCount()) {
         return false;
       }
       return isFieldNotNullRecursive(agg.getInput(), groupSet.asList().get(index));
@@ -3929,6 +4260,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
       }
     }
 
+    corDefOutputs.putAll(frame.corDefOutputs);
     return createFrameWithValueGenerator(oldInput, frame, miss, corDefOutputs);
   }
 

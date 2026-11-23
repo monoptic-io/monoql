@@ -937,6 +937,18 @@ where sal + 100 not in (
 !ok
 !}
 
+# [CALCITE-5216] Cannot parse parenthesized nested WITH clause
+# This sql program was validated in PostgreSQL
+with a as (with b as (select 1)(select 1)) select * from a;
++--------+
+| EXPR$0 |
++--------+
+|      1 |
++--------+
+(1 row)
+
+!ok
+
 # [CALCITE-356] AssertionError while translating query with WITH and correlated sub-query
 !if (use_old_decorr) {
 with t (a, b) as (select * from (values (1, 2)))
@@ -1183,7 +1195,7 @@ EnumerableCalc(expr#0..3=[{inputs}], ENAME=[$t1], DEEP2SAL=[$t3])
       EnumerableTableScan(table=[[scott, EMP]])
     EnumerableSort(sort0=[$0], dir0=[ASC])
       EnumerableAggregate(group=[{0}], EXPR$0=[SUM($1)])
-        EnumerableCalc(expr#0..4=[{inputs}], expr#5=[IS NOT NULL($t4)], expr#6=[CAST($t4):DECIMAL(19, 2) NOT NULL], expr#7=[0.00:DECIMAL(19, 2)], expr#8=[CASE($t5, $t6, $t7)], expr#9=[+($t2, $t8)], MGR9=[$t1], $f0=[$t9])
+        EnumerableCalc(expr#0..4=[{inputs}], expr#5=[IS NOT NULL($t4)], expr#6=[CAST($t4):DECIMAL(19, 2) NOT NULL], expr#7=[0.00:DECIMAL(19, 2)], expr#8=[CASE($t5, $t6, $t7)], expr#9=[+($t2, $t8)], MGR4=[$t1], $f0=[$t9])
           EnumerableMergeJoin(condition=[=($0, $3)], joinType=[left])
             EnumerableCalc(expr#0..7=[{inputs}], expr#8=[IS NOT NULL($t3)], EMPNO=[$t0], MGR=[$t3], SAL=[$t5], $condition=[$t8])
               EnumerableTableScan(table=[[scott, EMP]])
@@ -1193,6 +1205,24 @@ EnumerableCalc(expr#0..3=[{inputs}], ENAME=[$t1], DEEP2SAL=[$t3])
                   EnumerableTableScan(table=[[scott, EMP]])
 !plan
 !}
+
+# [CALCITE-5420] SqlToRel should populate the correlate id of a Project for queries with aggregates
+SELECT deptno,
+       SUM((SELECT char_length(dname) FROM "scott".dept
+            WHERE dept.deptno = emp.deptno)) AS s
+FROM   "scott".emp
+GROUP BY deptno
+ORDER BY deptno;
++--------+----+
+| DEPTNO | S  |
++--------+----+
+|     10 | 30 |
+|     20 | 40 |
+|     30 | 30 |
++--------+----+
+(3 rows)
+
+!ok
 
 # [CALCITE-1494] Inefficient plan for correlated sub-queries
 # Plan must have only one scan each of emp and dept.
@@ -2425,16 +2455,17 @@ select sal from "scott".emp e
 
 !ok
 !if (use_old_decorr) {
-EnumerableCalc(expr#0..5=[{inputs}], expr#6=[RAND()], expr#7=[CAST($t6):INTEGER NOT NULL], expr#8=[2], expr#9=[MOD($t7, $t8)], expr#10=[3], expr#11=[=($t9, $t10)], expr#12=[OR($t11, $t3)], SAL=[$t1], $condition=[$t12])
+EnumerableCalc(expr#0..5=[{inputs}], expr#6=[RAND()], expr#7=[CAST($t6):INTEGER NOT NULL], expr#8=[2], expr#9=[MOD($t7, $t8)], expr#10=[3], expr#11=[=($t9, $t10)], expr#12=[IS NOT FALSE($t3)], expr#13=[IS NOT NULL($t3)], expr#14=[AND($t12, $t13)], expr#15=[OR($t11, $t14)], SAL=[$t1], $condition=[$t15])
   EnumerableMergeJoin(condition=[=($2, $4)], joinType=[left])
     EnumerableSort(sort0=[$2], dir0=[ASC])
       EnumerableCalc(expr#0..7=[{inputs}], EMPNO=[$t0], SAL=[$t5], DEPTNO=[$t7])
         EnumerableTableScan(table=[[scott, EMP]])
-    EnumerableSort(sort0=[$1], dir0=[ASC])
-      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[false], expr#3=[1], expr#4=[<=($t1, $t3)], cs=[$t2], DEPTNO=[$t0], rn=[$t1], $condition=[$t4])
-        EnumerableWindow(window#0=[window(partition {0} rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])], constants=[[false]])
-          EnumerableCalc(expr#0..2=[{inputs}], DEPTNO=[$t0])
-            EnumerableTableScan(table=[[scott, DEPT]])
+    EnumerableCalc(expr#0..2=[{inputs}], expr#3=[1], expr#4=[<=($t2, $t3)], proj#0..2=[{exprs}], $condition=[$t4])
+      EnumerableSort(sort0=[$1], dir0=[ASC])
+        EnumerableCalc(expr#0..1=[{inputs}], expr#2=[false], cs=[$t2], DEPTNO=[$t0], rn=[$t1])
+          EnumerableWindow(window#0=[window(partition {0} rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])], constants=[[false]])
+            EnumerableCalc(expr#0..2=[{inputs}], DEPTNO=[$t0])
+              EnumerableTableScan(table=[[scott, DEPT]])
 !plan
 !}
 
@@ -2540,11 +2571,12 @@ EnumerableCalc(expr#0..5=[{inputs}], expr#6=[NOT($t3)], expr#7=[IS NOT NULL($t3)
     EnumerableSort(sort0=[$2], dir0=[ASC])
       EnumerableCalc(expr#0..7=[{inputs}], EMPNO=[$t0], SAL=[$t5], DEPTNO=[$t7])
         EnumerableTableScan(table=[[scott, EMP]])
-    EnumerableSort(sort0=[$1], dir0=[ASC])
-      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[false], expr#3=[1], expr#4=[<=($t1, $t3)], cs=[$t2], DEPTNO=[$t0], rn=[$t1], $condition=[$t4])
-        EnumerableWindow(window#0=[window(partition {0} rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])], constants=[[false]])
-          EnumerableCalc(expr#0..2=[{inputs}], DEPTNO=[$t0])
-            EnumerableTableScan(table=[[scott, DEPT]])
+    EnumerableCalc(expr#0..2=[{inputs}], expr#3=[1], expr#4=[<=($t2, $t3)], proj#0..2=[{exprs}], $condition=[$t4])
+      EnumerableSort(sort0=[$1], dir0=[ASC])
+        EnumerableCalc(expr#0..1=[{inputs}], expr#2=[false], cs=[$t2], DEPTNO=[$t0], rn=[$t1])
+          EnumerableWindow(window#0=[window(partition {0} rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])], constants=[[false]])
+            EnumerableCalc(expr#0..2=[{inputs}], DEPTNO=[$t0])
+              EnumerableTableScan(table=[[scott, DEPT]])
 !plan
 !}
 
@@ -3327,6 +3359,60 @@ from "scott".emp emp1;
 |  7934 | MILLER | CLERK     | 7782 | 1982-01-23 | 1300.00 |         |     10 |       |
 +-------+--------+-----------+------+------------+---------+---------+--------+-------+
 (14 rows)
+
+!ok
+
+# [CALCITE-7943] SubQueryRemoveRule gives wrong results for "<> SOME" and
+# "= ALL" when another sub-query comes first
+select empno, sal > all (select sal from emp where deptno = 10) as x,
+  comm <> some (select comm from emp where empno = 7499) as y
+from emp where deptno = 30;
++-------+-------+-------+
+| EMPNO | X     | Y     |
++-------+-------+-------+
+|  7499 | false | false |
+|  7521 | false | true  |
+|  7654 | false | true  |
+|  7698 | false |       |
+|  7844 | false | true  |
+|  7900 | false |       |
++-------+-------+-------+
+(6 rows)
+
+!ok
+
+# "= ALL" after an IN sub-query
+select empno, comm in (select comm from emp where deptno = 30) as s,
+  comm = all (select comm from emp where empno = 7499) as a
+from emp where deptno = 30;
++-------+------+-------+
+| EMPNO | S    | A     |
++-------+------+-------+
+|  7499 | true | true  |
+|  7521 | true | false |
+|  7654 | true | false |
+|  7698 |      |       |
+|  7844 | true | false |
+|  7900 |      |       |
++-------+------+-------+
+(6 rows)
+
+!ok
+
+# Correlated "<> SOME" after another sub-query
+select dname, 1000 > all (select comm from emp where emp.deptno = dept.deptno) as x,
+  300 <> some (select comm from emp
+               where emp.deptno = dept.deptno and emp.comm = 300) as y
+from dept;
++------------+-------+-------+
+| DNAME      | X     | Y     |
++------------+-------+-------+
+| ACCOUNTING |       | false |
+| OPERATIONS | true  | false |
+| RESEARCH   |       | false |
+| SALES      | false | false |
++------------+-------+-------+
+(4 rows)
 
 !ok
 
@@ -4313,7 +4399,7 @@ select * from "scott".emp where (empno, deptno) not in ((1, 2), (3, null));
 
 !ok
 !if (use_old_decorr) {
-EnumerableCalc(expr#0..14=[{inputs}], expr#15=[0], expr#16=[=($t8, $t15)], expr#17=[IS NULL($t7)], expr#18=[IS NOT NULL($t13)], expr#19=[AND($t14, $t18)], expr#20=[<($t9, $t8)], expr#21=[OR($t17, $t19, $t18, $t20)], expr#22=[IS NOT TRUE($t21)], expr#23=[OR($t16, $t22)], proj#0..7=[{exprs}], $condition=[$t23])
+EnumerableCalc(expr#0..13=[{inputs}], expr#14=[0], expr#15=[=($t8, $t14)], expr#16=[IS NULL($t13)], expr#17=[>=($t9, $t8)], expr#18=[IS NOT NULL($t7)], expr#19=[AND($t16, $t17, $t18)], expr#20=[OR($t15, $t19)], proj#0..7=[{exprs}], $condition=[$t20])
   EnumerableMergeJoin(condition=[AND(=($10, $11), OR(IS NULL($12), =(CAST($7):INTEGER, $12)))], joinType=[left])
     EnumerableSort(sort0=[$10], dir0=[ASC])
       EnumerableCalc(expr#0..9=[{inputs}], expr#10=[CAST($t0):INTEGER NOT NULL], proj#0..10=[{exprs}])
@@ -4322,7 +4408,7 @@ EnumerableCalc(expr#0..14=[{inputs}], expr#15=[0], expr#16=[=($t8, $t15)], expr#
           EnumerableAggregate(group=[{}], c=[COUNT()], ck=[COUNT() FILTER $0])
             EnumerableValues(tuples=[[{ true }, { true }]])
     EnumerableSort(sort0=[$0], dir0=[ASC])
-      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], expr#3=[IS NOT NULL($t1)], proj#0..3=[{exprs}])
+      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], proj#0..2=[{exprs}])
         EnumerableValues(tuples=[[{ 3, null }, { 1, 2 }]])
 !plan
 !}
@@ -4337,14 +4423,14 @@ select * from "scott".emp where (mgr, deptno) not in ((1, 2), (3, null), (cast(n
 
 !ok
 !if (use_old_decorr) {
-EnumerableCalc(expr#0..13=[{inputs}], expr#14=[0], expr#15=[=($t8, $t14)], expr#16=[IS NULL($t3)], expr#17=[IS NULL($t7)], expr#18=[IS NOT NULL($t12)], expr#19=[AND($t13, $t18)], expr#20=[<($t9, $t8)], expr#21=[OR($t16, $t17, $t19, $t18, $t20)], expr#22=[IS NOT TRUE($t21)], expr#23=[OR($t15, $t22)], proj#0..7=[{exprs}], $condition=[$t23])
+EnumerableCalc(expr#0..12=[{inputs}], expr#13=[0], expr#14=[=($t8, $t13)], expr#15=[IS NULL($t12)], expr#16=[>=($t9, $t8)], expr#17=[IS NOT NULL($t3)], expr#18=[IS NOT NULL($t7)], expr#19=[AND($t15, $t16, $t17, $t18)], expr#20=[OR($t14, $t19)], proj#0..7=[{exprs}], $condition=[$t20])
   EnumerableNestedLoopJoin(condition=[AND(OR(IS NULL($10), =(CAST($3):INTEGER, $10)), OR(IS NULL($11), =(CAST($7):INTEGER, $11)))], joinType=[left])
     EnumerableNestedLoopJoin(condition=[true], joinType=[inner])
       EnumerableTableScan(table=[[scott, EMP]])
       EnumerableAggregate(group=[{}], c=[COUNT()], ck=[COUNT() FILTER $0])
         EnumerableCalc(expr#0..1=[{inputs}], expr#2=[IS NOT NULL($t0)], expr#3=[IS NOT NULL($t1)], expr#4=[OR($t2, $t3)], $f2=[$t4])
           EnumerableValues(tuples=[[{ 3, null }, { null, null }, { 1, 2 }]])
-    EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], expr#3=[IS NOT NULL($t0)], expr#4=[IS NOT NULL($t1)], expr#5=[AND($t3, $t4)], expr#6=[OR($t3, $t4)], proj#0..2=[{exprs}], $f20=[$t5], $condition=[$t6])
+    EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], expr#3=[IS NOT NULL($t0)], expr#4=[IS NOT NULL($t1)], expr#5=[OR($t3, $t4)], proj#0..2=[{exprs}], $condition=[$t5])
       EnumerableValues(tuples=[[{ 3, null }, { null, null }, { 1, 2 }]])
 !plan
 !}
@@ -4379,7 +4465,7 @@ select * from "scott".emp where (empno, deptno) not in ((7369, 20), (7499, 30));
 
 !ok
 !if (use_old_decorr) {
-EnumerableCalc(expr#0..15=[{inputs}], expr#16=[0], expr#17=[=($t8, $t16)], expr#18=[IS NULL($t7)], expr#19=[IS NOT NULL($t14)], expr#20=[AND($t15, $t19)], expr#21=[<($t9, $t8)], expr#22=[OR($t18, $t20, $t19, $t21)], expr#23=[IS NOT TRUE($t22)], expr#24=[OR($t17, $t23)], proj#0..7=[{exprs}], $condition=[$t24])
+EnumerableCalc(expr#0..14=[{inputs}], expr#15=[0], expr#16=[=($t8, $t15)], expr#17=[IS NULL($t14)], expr#18=[>=($t9, $t8)], expr#19=[IS NOT NULL($t7)], expr#20=[AND($t17, $t18, $t19)], expr#21=[OR($t16, $t20)], proj#0..7=[{exprs}], $condition=[$t21])
   EnumerableMergeJoin(condition=[AND(=($10, $12), =($11, $13))], joinType=[left])
     EnumerableSort(sort0=[$10], sort1=[$11], dir0=[ASC], dir1=[ASC])
       EnumerableCalc(expr#0..9=[{inputs}], expr#10=[CAST($t0):INTEGER NOT NULL], expr#11=[CAST($t7):INTEGER], proj#0..11=[{exprs}])
@@ -4389,7 +4475,7 @@ EnumerableCalc(expr#0..15=[{inputs}], expr#16=[0], expr#17=[=($t8, $t16)], expr#
             EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], $f2=[$t2])
               EnumerableValues(tuples=[[{ 7369, 20 }, { 7499, 30 }]])
     EnumerableSort(sort0=[$0], sort1=[$1], dir0=[ASC], dir1=[ASC])
-      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], proj#0..2=[{exprs}], $f20=[$t2])
+      EnumerableCalc(expr#0..1=[{inputs}], expr#2=[true], proj#0..2=[{exprs}])
         EnumerableValues(tuples=[[{ 7369, 20 }, { 7499, 30 }]])
 !plan
 !}
@@ -4890,6 +4976,43 @@ FROM dept;
 
 !ok
 
+# [CALCITE-5716] Two level nested correlated subquery translates to incorrect ON condition.
+# A middle-level EXISTS holds two sibling inner EXISTS that correlate to
+# different levels: ea.mgr = e.mgr references the outer emp, while
+# e2.deptno = d.deptno references the middle dept. Each correlation must stay
+# at its originating level.
+SELECT e.empno
+FROM emp e
+WHERE EXISTS (
+  SELECT 1
+  FROM dept d
+  WHERE d.deptno = e.deptno
+    AND EXISTS (
+      SELECT 1 FROM emp ea WHERE ea.mgr = e.mgr)
+    AND EXISTS (
+      SELECT 1 FROM emp e2 WHERE e2.deptno = d.deptno))
+ORDER BY e.empno;
++-------+
+| EMPNO |
++-------+
+|  7369 |
+|  7499 |
+|  7521 |
+|  7566 |
+|  7654 |
+|  7698 |
+|  7782 |
+|  7788 |
+|  7844 |
+|  7876 |
+|  7900 |
+|  7902 |
+|  7934 |
++-------+
+(13 rows)
+
+!ok
+
 # [CALCITE-7034] IllegalArgumentException when correlate subQuery in on clause and use rightside columns
 SELECT e1.*
 FROM emp e1
@@ -4972,6 +5095,129 @@ ORDER BY e1.empno, e1.deptno;
 |  7934 | MILLER | CLERK     | 7782 | 1982-01-23 | 1300.00 |         |     10 |
 +-------+--------+-----------+------+------------+---------+---------+--------+
 (14 rows)
+
+!ok
+
+# [CALCITE-7543] RelBuilder.join should preserve variablesSet for RIGHT/FULL joins
+# this was validated using postgres
+SELECT empno
+FROM emp e
+RIGHT JOIN dept d
+  ON e.deptno = d.deptno
+ AND e.sal < (
+    SELECT MAX(e2.sal)
+    FROM emp e2
+    WHERE e2.deptno = d.deptno
+  )
+ORDER BY empno;
++-------+
+| EMPNO |
++-------+
+|  7369 |
+|  7499 |
+|  7521 |
+|  7566 |
+|  7654 |
+|  7782 |
+|  7844 |
+|  7876 |
+|  7900 |
+|  7934 |
+|       |
++-------+
+(11 rows)
+
+!ok
+
+SELECT empno
+FROM emp e
+FULL JOIN dept d
+  ON e.deptno = d.deptno
+ AND e.sal < (
+    SELECT MAX(e2.sal)
+    FROM emp e2
+    WHERE e2.deptno = d.deptno
+  )
+ORDER BY empno;
++-------+
+| EMPNO |
++-------+
+|  7369 |
+|  7499 |
+|  7521 |
+|  7566 |
+|  7654 |
+|  7698 |
+|  7782 |
+|  7788 |
+|  7839 |
+|  7844 |
+|  7876 |
+|  7900 |
+|  7902 |
+|  7934 |
+|       |
++-------+
+(15 rows)
+
+!ok
+
+SELECT empno
+FROM emp e
+RIGHT JOIN dept d
+  ON e.deptno = d.deptno
+ AND d.deptno <= ALL (
+    SELECT d2.deptno
+    FROM dept d2
+    WHERE d2.dname <> d.dname
+  )
+ORDER BY empno;
++-------+
+| EMPNO |
++-------+
+|  7782 |
+|  7839 |
+|  7934 |
+|       |
+|       |
+|       |
++-------+
+(6 rows)
+
+!ok
+
+SELECT empno
+FROM emp e
+FULL JOIN dept d
+  ON e.deptno = d.deptno
+ AND d.deptno <= ALL (
+    SELECT d2.deptno
+    FROM dept d2
+    WHERE d2.dname <> d.dname
+  )
+ORDER BY empno;
++-------+
+| EMPNO |
++-------+
+|  7369 |
+|  7499 |
+|  7521 |
+|  7566 |
+|  7654 |
+|  7698 |
+|  7782 |
+|  7788 |
+|  7839 |
+|  7844 |
+|  7876 |
+|  7900 |
+|  7902 |
+|  7934 |
+|       |
+|       |
+|       |
++-------+
+(17 rows)
 
 !ok
 
@@ -8045,6 +8291,619 @@ SELECT deptno FROM dept WHERE 1000.00 >
 
 !ok
 
+# [CALCITE-7587] RelDecorrelator fails on correlated scalar subquery with ROW_NUMBER window function
+# due to RexOver nullability mismatch
+# Correlated scalar sub-query in the SELECT list that contains a window function.
+# Decorrelation must add the correlation key to the window partition and preserve nullability
+# of the OVER expression after pulling it above the left correlate.
+SELECT e.ename,
+  (SELECT ROW_NUMBER() OVER (PARTITION BY e.deptno ORDER BY e.empno, d.deptno)
+   FROM dept d
+   WHERE e.deptno = d.deptno) AS rn
+FROM emp e
+ORDER BY e.empno;
++--------+----+
+| ENAME  | RN |
++--------+----+
+| SMITH  |  1 |
+| ALLEN  |  1 |
+| WARD   |  1 |
+| JONES  |  1 |
+| MARTIN |  1 |
+| BLAKE  |  1 |
+| CLARK  |  1 |
+| SCOTT  |  1 |
+| KING   |  1 |
+| TURNER |  1 |
+| ADAMS  |  1 |
+| JAMES  |  1 |
+| FORD   |  1 |
+| MILLER |  1 |
++--------+----+
+(14 rows)
+
+!ok
+
+# [CALCITE-7584] RelDecorrelator produces incorrect results for correlated LATERAL sub-queries with window functions
+# Correlated LATERAL sub-query with a window expression.
+# The equality predicate between the inner and outer query must remain applied
+# after decorrelation.
+# this was validated using postgres
+SELECT e.ename, d.deptno, d.m
+FROM emp e
+JOIN LATERAL (
+  SELECT d.deptno,
+    MAX(d.deptno + e.empno) OVER (PARTITION BY e.deptno) AS m
+  FROM dept d
+  WHERE e.deptno = d.deptno
+) d ON TRUE
+ORDER BY e.empno;
++--------+--------+------+
+| ENAME  | DEPTNO | M    |
++--------+--------+------+
+| SMITH  |     20 | 7389 |
+| ALLEN  |     30 | 7529 |
+| WARD   |     30 | 7551 |
+| JONES  |     20 | 7586 |
+| MARTIN |     30 | 7684 |
+| BLAKE  |     30 | 7728 |
+| CLARK  |     10 | 7792 |
+| SCOTT  |     20 | 7808 |
+| KING   |     10 | 7849 |
+| TURNER |     30 | 7874 |
+| ADAMS  |     20 | 7896 |
+| JAMES  |     30 | 7930 |
+| FORD   |     20 | 7922 |
+| MILLER |     10 | 7944 |
++--------+--------+------+
+(14 rows)
+
+!ok
+
+# The window must also be partitioned by correlation variables
+# that are only referenced by the window expression.
+# this was validated using postgres
+SELECT e.ename, d.deptno, d.rn
+FROM emp e
+JOIN LATERAL (
+  SELECT d.deptno,
+    ROW_NUMBER() OVER (PARTITION BY e.deptno ORDER BY e.empno, d.deptno) AS rn
+  FROM dept d
+  WHERE e.deptno = d.deptno
+) d ON TRUE
+ORDER BY e.empno;
++--------+--------+----+
+| ENAME  | DEPTNO | RN |
++--------+--------+----+
+| SMITH  |     20 |  1 |
+| ALLEN  |     30 |  1 |
+| WARD   |     30 |  1 |
+| JONES  |     20 |  1 |
+| MARTIN |     30 |  1 |
+| BLAKE  |     30 |  1 |
+| CLARK  |     10 |  1 |
+| SCOTT  |     20 |  1 |
+| KING   |     10 |  1 |
+| TURNER |     30 |  1 |
+| ADAMS  |     20 |  1 |
+| JAMES  |     30 |  1 |
+| FORD   |     20 |  1 |
+| MILLER |     10 |  1 |
++--------+--------+----+
+(14 rows)
+
+!ok
+
+# Multiple equality-derived correlation keys must remain available
+# when a window expression also needs an additional correlation key.
+# this was validated using postgres
+SELECT e.ename, s.empno, s.m
+FROM emp e
+JOIN LATERAL (
+  SELECT e2.empno,
+    MAX(e2.empno + e.sal) OVER (PARTITION BY e.deptno, e.job) AS m
+  FROM emp e2
+  WHERE e2.deptno = e.deptno
+    AND e2.job = e.job
+) s ON TRUE
+WHERE e.empno IN (7369, 7499, 7788)
+ORDER BY e.empno, s.empno;
++-------+-------+----------+
+| ENAME | EMPNO | M        |
++-------+-------+----------+
+| SMITH |  7369 |  8676.00 |
+| SMITH |  7876 |  8676.00 |
+| ALLEN |  7499 |  9444.00 |
+| ALLEN |  7521 |  9444.00 |
+| ALLEN |  7654 |  9444.00 |
+| ALLEN |  7844 |  9444.00 |
+| SCOTT |  7788 | 10902.00 |
+| SCOTT |  7902 | 10902.00 |
++-------+-------+----------+
+(8 rows)
+
+!ok
+
+# this was validated using postgres
+WITH bonus(ENAME, JOB, SAL, COMM) AS (
+  VALUES ('ALLEN', 'SALESMAN', 1600.00, 300.00),
+         ('WARD', 'SALESMAN', 1250.00, 500.00)
+)
+SELECT *
+FROM BONUS
+WHERE EXISTS(SELECT RANK() OVER (PARTITION BY hiredate ORDER BY sal) AS s
+                    FROM EMP, DEPT where EMP.deptno = DEPT.deptno
+                        AND DEPT.dname < BONUS.ENAME);
++-------+----------+---------+--------+
+| ENAME | JOB      | SAL     | COMM   |
++-------+----------+---------+--------+
+| ALLEN | SALESMAN | 1600.00 | 300.00 |
+| WARD  | SALESMAN | 1250.00 | 500.00 |
++-------+----------+---------+--------+
+(2 rows)
+
+!ok
+
+# this was validated using postgres
+SELECT *
+FROM emp e
+WHERE EXISTS (
+    SELECT 1
+    FROM (
+      SELECT
+        d.dname,
+        d.deptno,
+        RANK() OVER (PARTITION BY d.dname ORDER BY d.deptno DESC) AS rnk
+      FROM dept d
+    ) x
+    WHERE x.rnk = e.deptno
+);
++-------+-------+-----+-----+----------+-----+------+--------+
+| EMPNO | ENAME | JOB | MGR | HIREDATE | SAL | COMM | DEPTNO |
++-------+-------+-----+-----+----------+-----+------+--------+
++-------+-------+-----+-----+----------+-----+------+--------+
+(0 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..8=[{inputs}], proj#0..7=[{exprs}])
+  EnumerableHashJoin(condition=[=($8, $12)], joinType=[semi])
+    EnumerableCalc(expr#0..7=[{inputs}], expr#8=[CAST($t7):BIGINT], proj#0..8=[{exprs}])
+      EnumerableTableScan(table=[[scott, EMP]])
+    EnumerableWindow(window#0=[window(partition {1} order by [0 DESC] aggs [RANK()])])
+      EnumerableTableScan(table=[[scott, DEPT]])
+!plan
+!}
+
+create view calcite_7584_t1 as
+select * from (values
+  ('val1a', cast(6 as smallint), 8, cast(10 as bigint)),
+  ('val1b', cast(8 as smallint), 16, cast(19 as bigint)),
+  ('val1a', cast(16 as smallint), 12, cast(21 as bigint)),
+  ('val1a', cast(16 as smallint), 12, cast(10 as bigint)),
+  ('val1c', cast(8 as smallint), 16, cast(19 as bigint)),
+  ('val1d', cast(null as smallint), 16, cast(22 as bigint)),
+  ('val1d', cast(null as smallint), 16, cast(19 as bigint)),
+  ('val1e', cast(10 as smallint), cast(null as integer), cast(25 as bigint)),
+  ('val1e', cast(10 as smallint), cast(null as integer), cast(19 as bigint)),
+  ('val1d', cast(10 as smallint), cast(null as integer), cast(12 as bigint)),
+  ('val1a', cast(6 as smallint), 8, cast(10 as bigint)),
+  ('val1e', cast(10 as smallint), cast(null as integer), cast(19 as bigint))
+) as t(t1a, t1b, t1c, t1d);
+(0 rows modified)
+
+!update
+
+create view calcite_7584_t2 as
+select * from (values
+  ('val2a', cast(6 as smallint), 12, cast(14 as bigint)),
+  ('val1b', cast(10 as smallint), 12, cast(19 as bigint)),
+  ('val1b', cast(8 as smallint), 16, cast(119 as bigint)),
+  ('val1c', cast(12 as smallint), 16, cast(219 as bigint)),
+  ('val1b', cast(null as smallint), 16, cast(319 as bigint)),
+  ('val2e', cast(8 as smallint), cast(null as integer), cast(419 as bigint)),
+  ('val1f', cast(19 as smallint), cast(null as integer), cast(519 as bigint)),
+  ('val1b', cast(10 as smallint), 12, cast(19 as bigint)),
+  ('val1b', cast(8 as smallint), 16, cast(19 as bigint)),
+  ('val1c', cast(12 as smallint), 16, cast(19 as bigint)),
+  ('val1e', cast(8 as smallint), cast(null as integer), cast(19 as bigint)),
+  ('val1f', cast(19 as smallint), cast(null as integer), cast(19 as bigint)),
+  ('val1b', cast(null as smallint), 16, cast(19 as bigint))
+) as t(t2a, t2b, t2c, t2d);
+(0 rows modified)
+
+!update
+
+create view calcite_7584_t3 as
+select * from (values
+  ('val3a', cast(6 as smallint), 12, cast(110 as bigint)),
+  ('val3a', cast(6 as smallint), 12, cast(10 as bigint)),
+  ('val1b', cast(10 as smallint), 12, cast(219 as bigint)),
+  ('val1b', cast(10 as smallint), 12, cast(19 as bigint)),
+  ('val1b', cast(8 as smallint), 16, cast(319 as bigint)),
+  ('val1b', cast(8 as smallint), 16, cast(19 as bigint)),
+  ('val3c', cast(17 as smallint), 16, cast(519 as bigint)),
+  ('val3c', cast(17 as smallint), 16, cast(19 as bigint)),
+  ('val1b', cast(null as smallint), 16, cast(419 as bigint)),
+  ('val1b', cast(null as smallint), 16, cast(19 as bigint)),
+  ('val3b', cast(8 as smallint), cast(null as integer), cast(719 as bigint)),
+  ('val3b', cast(8 as smallint), cast(null as integer), cast(19 as bigint))
+) as t(t3a, t3b, t3c, t3d);
+(0 rows modified)
+
+!update
+
+# Window function in a correlated subquery.
+# this was validated using postgres
+SELECT 1
+FROM calcite_7584_t1 t1
+WHERE t1b < (SELECT MAX(tmp.s) FROM (
+             SELECT SUM(t2b) OVER (PARTITION BY t2c ORDER BY t2d) AS s
+               FROM calcite_7584_t2 t2 WHERE t2.t2d = t1.t1d) AS tmp);
++--------+
+| EXPR$0 |
++--------+
+|      1 |
+|      1 |
+|      1 |
+|      1 |
++--------+
+(4 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..1=[{inputs}], expr#2=[1], EXPR$0=[$t2])
+  EnumerableHashJoin(condition=[AND(=($1, $2), <($0, $3))], joinType=[semi])
+    EnumerableValues(tuples=[[{ 6, 10 }, { 8, 19 }, { 16, 21 }, { 16, 10 }, { 8, 19 }, { null, 22 }, { null, 19 }, { 10, 25 }, { 10, 19 }, { 10, 12 }, { 6, 10 }, { 10, 19 }]])
+    EnumerableSort(sort0=[$0], dir0=[ASC])
+      EnumerableAggregate(group=[{0}], EXPR$0=[MAX($1) FILTER $2])
+        EnumerableCalc(expr#0..4=[{inputs}], expr#5=[0:BIGINT], expr#6=[>($t4, $t5)], T2D=[$t2], $f2=[$t3], $f3=[$t6])
+          EnumerableWindow(window#0=[window(partition {1, 2} order by [2] aggs [$SUM0($0), COUNT($0)])])
+            EnumerableValues(tuples=[[{ 6, 12, 14 }, { 10, 12, 19 }, { 8, 16, 119 }, { 12, 16, 219 }, { null, 16, 319 }, { 8, null, 419 }, { 19, null, 519 }, { 10, 12, 19 }, { 8, 16, 19 }, { 12, 16, 19 }, { 8, null, 19 }, { 19, null, 19 }, { null, 16, 19 }]])
+!plan
+!}
+
+# Same as above but with LIMIT/ORDER BY instead of MAX.
+# this was validated using postgres
+SELECT 1
+FROM calcite_7584_t1 t1
+WHERE t1b < (SELECT SUM(t2b) OVER (PARTITION BY t2c ORDER BY t2d) AS s
+               FROM calcite_7584_t2 t2 WHERE t2.t2d = t1.t1d
+             ORDER BY s DESC
+             LIMIT 1);
++--------+
+| EXPR$0 |
++--------+
+|      1 |
+|      1 |
+|      1 |
+|      1 |
++--------+
+(4 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..4=[{inputs}], expr#5=[1], EXPR$0=[$t5])
+  EnumerableHashJoin(condition=[AND(=($1, $4), <($3, $0))], joinType=[inner])
+    EnumerableCalc(expr#0..2=[{inputs}], expr#3=[1], expr#4=[<=($t2, $t3)], proj#0..2=[{exprs}], $condition=[$t4])
+      EnumerableWindow(window#0=[window(partition {1} order by [0 DESC] rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])])
+        EnumerableCalc(expr#0..4=[{inputs}], expr#5=[0:BIGINT], expr#6=[>($t3, $t5)], expr#7=[null:SMALLINT], expr#8=[CASE($t6, $t4, $t7)], S=[$t8], T2D=[$t2])
+          EnumerableWindow(window#0=[window(partition {1, 2} order by [2] aggs [COUNT($0), $SUM0($0)])])
+            EnumerableValues(tuples=[[{ 6, 12, 14 }, { 10, 12, 19 }, { 8, 16, 119 }, { 12, 16, 219 }, { null, 16, 319 }, { 8, null, 419 }, { 19, null, 519 }, { 10, 12, 19 }, { 8, 16, 19 }, { 12, 16, 19 }, { 8, null, 19 }, { 19, null, 19 }, { null, 16, 19 }]])
+    EnumerableValues(tuples=[[{ 6, 10 }, { 8, 19 }, { 16, 21 }, { 16, 10 }, { 8, 19 }, { null, 22 }, { null, 19 }, { 10, 25 }, { 10, 19 }, { 10, 12 }, { 6, 10 }, { 10, 19 }]])
+!plan
+!}
+
+# Window function in a correlated subquery with a non-equi predicate.
+# this was validated using postgres
+SELECT 1
+FROM calcite_7584_t1 t1
+WHERE t1b < (SELECT MAX(tmp.s) FROM (
+             SELECT SUM(t2b) OVER (PARTITION BY t2c ORDER BY t2d) AS s
+               FROM calcite_7584_t2 t2 WHERE t2.t2d <= t1.t1d) AS tmp);
++--------+
+| EXPR$0 |
++--------+
+|      1 |
+|      1 |
+|      1 |
+|      1 |
+|      1 |
+|      1 |
++--------+
+(6 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..1=[{inputs}], expr#2=[1], EXPR$0=[$t2])
+  EnumerableHashJoin(condition=[AND(=($1, $2), <($0, $3))], joinType=[semi])
+    EnumerableValues(tuples=[[{ 6, 10 }, { 8, 19 }, { 16, 21 }, { 16, 10 }, { 8, 19 }, { null, 22 }, { null, 19 }, { 10, 25 }, { 10, 19 }, { 10, 12 }, { 6, 10 }, { 10, 19 }]])
+    EnumerableSort(sort0=[$0], dir0=[ASC])
+      EnumerableAggregate(group=[{0}], EXPR$0=[MAX($1) FILTER $2])
+        EnumerableCalc(expr#0..5=[{inputs}], expr#6=[0:BIGINT], expr#7=[>($t5, $t6)], T1D=[$t3], $f2=[$t4], $f3=[$t7])
+          EnumerableWindow(window#0=[window(partition {1, 3} order by [2] aggs [$SUM0($0), COUNT($0)])])
+            EnumerableNestedLoopJoin(condition=[<=($2, $3)], joinType=[inner])
+              EnumerableValues(tuples=[[{ 6, 12, 14 }, { 10, 12, 19 }, { 8, 16, 119 }, { 12, 16, 219 }, { null, 16, 319 }, { 8, null, 419 }, { 19, null, 519 }, { 10, 12, 19 }, { 8, 16, 19 }, { 12, 16, 19 }, { 8, null, 19 }, { 19, null, 19 }, { null, 16, 19 }]])
+              EnumerableAggregate(group=[{0}])
+                EnumerableValues(tuples=[[{ 10 }, { 19 }, { 21 }, { 10 }, { 19 }, { 22 }, { 19 }, { 25 }, { 19 }, { 12 }, { 10 }, { 19 }]])
+!plan
+!}
+
+# Same as above but with LIMIT/ORDER BY.
+# this was validated using postgres
+SELECT 1
+FROM calcite_7584_t1 t1
+WHERE t1b < (SELECT SUM(t2b) OVER (PARTITION BY t2c ORDER BY t2d) AS s
+               FROM calcite_7584_t2 t2 WHERE t2.t2d <= t1.t1d
+             ORDER BY s DESC
+             LIMIT 1);
++--------+
+| EXPR$0 |
++--------+
+|      1 |
+|      1 |
+|      1 |
+|      1 |
+|      1 |
+|      1 |
++--------+
+(6 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..4=[{inputs}], expr#5=[1], EXPR$0=[$t5])
+  EnumerableHashJoin(condition=[AND(=($1, $3), <($0, $2))], joinType=[inner])
+    EnumerableValues(tuples=[[{ 6, 10 }, { 8, 19 }, { 16, 21 }, { 16, 10 }, { 8, 19 }, { null, 22 }, { null, 19 }, { 10, 25 }, { 10, 19 }, { 10, 12 }, { 6, 10 }, { 10, 19 }]])
+    EnumerableCalc(expr#0..2=[{inputs}], expr#3=[1], expr#4=[<=($t2, $t3)], proj#0..2=[{exprs}], $condition=[$t4])
+      EnumerableWindow(window#0=[window(partition {1} order by [0 DESC] rows between UNBOUNDED PRECEDING and CURRENT ROW aggs [ROW_NUMBER()])])
+        EnumerableCalc(expr#0..5=[{inputs}], expr#6=[0:BIGINT], expr#7=[>($t4, $t6)], expr#8=[null:SMALLINT], expr#9=[CASE($t7, $t5, $t8)], S=[$t9], T1D=[$t3])
+          EnumerableWindow(window#0=[window(partition {1, 3} order by [2] aggs [COUNT($0), $SUM0($0)])])
+            EnumerableNestedLoopJoin(condition=[<=($2, $3)], joinType=[inner])
+              EnumerableValues(tuples=[[{ 6, 12, 14 }, { 10, 12, 19 }, { 8, 16, 119 }, { 12, 16, 219 }, { null, 16, 319 }, { 8, null, 419 }, { 19, null, 519 }, { 10, 12, 19 }, { 8, 16, 19 }, { 12, 16, 19 }, { 8, null, 19 }, { 19, null, 19 }, { null, 16, 19 }]])
+              EnumerableAggregate(group=[{0}])
+                EnumerableValues(tuples=[[{ 10 }, { 19 }, { 21 }, { 10 }, { 19 }, { 22 }, { 19 }, { 25 }, { 19 }, { 12 }, { 10 }, { 19 }]])
+!plan
+!}
+
+# Window function in a correlated subquery over joins.
+# this was validated using postgres
+SELECT t1b
+FROM calcite_7584_t1 t1
+WHERE t1b > (SELECT MAX(tmp.s) FROM (
+             SELECT RANK() OVER (PARTITION BY t3c, t2b ORDER BY t3c) AS s
+               FROM calcite_7584_t2 t2, calcite_7584_t3 t3
+              WHERE t2.t2c = t3.t3c AND t2.t2a = t1.t1a) AS tmp);
++-----+
+| T1B |
++-----+
+|   8 |
+|   8 |
++-----+
+(2 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..1=[{inputs}], T1B=[$t1])
+  EnumerableHashJoin(condition=[AND(=($0, $2), >(CAST($1):BIGINT, $3))], joinType=[semi])
+    EnumerableValues(tuples=[[{ 'val1a', 6 }, { 'val1b', 8 }, { 'val1a', 16 }, { 'val1a', 16 }, { 'val1c', 8 }, { 'val1d', null }, { 'val1d', null }, { 'val1e', 10 }, { 'val1e', 10 }, { 'val1d', 10 }, { 'val1a', 6 }, { 'val1e', 10 }]])
+    EnumerableSort(sort0=[$0], dir0=[ASC])
+      EnumerableAggregate(group=[{0}], EXPR$0=[MAX($4)])
+        EnumerableWindow(window#0=[window(partition {0, 1, 3} aggs [RANK()])])
+          EnumerableMergeJoin(condition=[=($2, $3)], joinType=[inner])
+            EnumerableSort(sort0=[$2], dir0=[ASC])
+              EnumerableValues(tuples=[[{ 'val2a', 6, 12 }, { 'val1b', 10, 12 }, { 'val1b', 8, 16 }, { 'val1c', 12, 16 }, { 'val1b', null, 16 }, { 'val2e', 8, null }, { 'val1f', 19, null }, { 'val1b', 10, 12 }, { 'val1b', 8, 16 }, { 'val1c', 12, 16 }, { 'val1e', 8, null }, { 'val1f', 19, null }, { 'val1b', null, 16 }]])
+            EnumerableValues(tuples=[[{ 12 }, { 12 }, { 12 }, { 12 }, { 16 }, { 16 }, { 16 }, { 16 }, { 16 }, { 16 }, { null }, { null }]])
+!plan
+!}
+
+# Window function in a correlated subquery over aggregation.
+# this was validated using postgres
+SELECT t1b
+FROM calcite_7584_t1 t1
+WHERE t1b > (SELECT MAX(tmp.s) FROM (
+             SELECT RANK() OVER (PARTITION BY t3c, t3d ORDER BY t3c) AS s
+               FROM (SELECT t3b, t3c, MAX(t3d) AS t3d
+                       FROM calcite_7584_t3 t3 GROUP BY t3b, t3c) AS g) AS tmp)
+ORDER BY t1b;
++-----+
+| T1B |
++-----+
+|   6 |
+|   6 |
+|   8 |
+|   8 |
+|  10 |
+|  10 |
+|  10 |
+|  10 |
+|  16 |
+|  16 |
++-----+
+(10 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableSort(sort0=[$0], dir0=[ASC])
+  EnumerableCalc(expr#0..1=[{inputs}], T1B=[$t0])
+    EnumerableNestedLoopJoin(condition=[>(CAST($0):BIGINT, $1)], joinType=[inner])
+      EnumerableValues(tuples=[[{ 6 }, { 8 }, { 16 }, { 16 }, { 8 }, { null }, { null }, { 10 }, { 10 }, { 10 }, { 6 }, { 10 }]])
+      EnumerableAggregate(group=[{}], EXPR$0=[MAX($3)])
+        EnumerableWindow(window#0=[window(partition {1, 2} aggs [RANK()])])
+          EnumerableAggregate(group=[{0, 1}], T3D=[MAX($2)])
+            EnumerableValues(tuples=[[{ 6, 12, 110 }, { 6, 12, 10 }, { 10, 12, 219 }, { 10, 12, 19 }, { 8, 16, 319 }, { 8, 16, 19 }, { 17, 16, 519 }, { 17, 16, 19 }, { null, 16, 419 }, { null, 16, 19 }, { 8, null, 719 }, { 8, null, 19 }]])
+!plan
+!}
+
+# this was validated using postgres
+SELECT 1
+FROM calcite_7584_t1 t1
+WHERE t1b = (SELECT MAX(tmp.s) FROM (
+             SELECT SUM(t2c) OVER (PARTITION BY t2c ORDER BY t1.t1d + t2d) AS s
+               FROM calcite_7584_t2 t2) AS tmp);
++--------+
+| EXPR$0 |
++--------+
++--------+
+(0 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..1=[{inputs}], expr#2=[1], EXPR$0=[$t2])
+  EnumerableHashJoin(condition=[AND(=($1, $2), =(CAST($0):INTEGER, $3))], joinType=[semi])
+    EnumerableValues(tuples=[[{ 6, 10 }, { 8, 19 }, { 16, 21 }, { 16, 10 }, { 8, 19 }, { null, 22 }, { null, 19 }, { 10, 25 }, { 10, 19 }, { 10, 12 }, { 6, 10 }, { 10, 19 }]])
+    EnumerableSort(sort0=[$0], dir0=[ASC])
+      EnumerableAggregate(group=[{0}], EXPR$0=[MAX($1) FILTER $2])
+        EnumerableCalc(expr#0..4=[{inputs}], expr#5=[0:BIGINT], expr#6=[>($t4, $t5)], T1D=[$t1], $f2=[$t3], $f3=[$t6])
+          EnumerableWindow(window#0=[window(partition {0, 1} order by [2] aggs [$SUM0($0), COUNT($0)])])
+            EnumerableCalc(expr#0..2=[{inputs}], expr#3=[+($t2, $t1)], T2C=[$t0], T1D=[$t2], $2=[$t3])
+              EnumerableNestedLoopJoin(condition=[true], joinType=[inner])
+                EnumerableValues(tuples=[[{ 12, 14 }, { 12, 19 }, { 16, 119 }, { 16, 219 }, { 16, 319 }, { null, 419 }, { null, 519 }, { 12, 19 }, { 16, 19 }, { 16, 19 }, { null, 19 }, { null, 19 }, { 16, 19 }]])
+                EnumerableAggregate(group=[{0}])
+                  EnumerableValues(tuples=[[{ 10 }, { 19 }, { 21 }, { 10 }, { 19 }, { 22 }, { 19 }, { 25 }, { 19 }, { 12 }, { 10 }, { 19 }]])
+!plan
+!}
+
+# [CALCITE-7584] Correlated subquery with RANK() window function and IN predicate
+# Test case for window function in correlated subquery with IN predicate
+# this was validated using postgres
+SELECT t1a
+FROM calcite_7584_t1 t1
+WHERE t1b IN (SELECT RANK() OVER (PARTITION BY t3c ORDER BY t2b) AS s
+              FROM calcite_7584_t2 t2, calcite_7584_t3 t3
+              WHERE t2.t2c = t3.t3c AND t2.t2a < t1.t1a);
++-----+
+| T1A |
++-----+
++-----+
+(0 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableCalc(expr#0..2=[{inputs}], T1A=[$t0])
+  EnumerableHashJoin(condition=[AND(=($0, $4), =($2, $3))], joinType=[semi])
+    EnumerableCalc(expr#0..1=[{inputs}], expr#2=[CAST($t1):BIGINT], proj#0..2=[{exprs}])
+      EnumerableValues(tuples=[[{ 'val1a', 6 }, { 'val1b', 8 }, { 'val1a', 16 }, { 'val1a', 16 }, { 'val1c', 8 }, { 'val1d', null }, { 'val1d', null }, { 'val1e', 10 }, { 'val1e', 10 }, { 'val1d', 10 }, { 'val1a', 6 }, { 'val1e', 10 }]])
+    EnumerableCalc(expr#0..1=[{inputs}], S=[$t1], T1A=[$t0])
+      EnumerableAggregate(group=[{4, 5}])
+        EnumerableWindow(window#0=[window(partition {0, 4} order by [2] aggs [RANK()])])
+          EnumerableHashJoin(condition=[=($0, $3)], joinType=[inner])
+            EnumerableValues(tuples=[[{ 12 }, { 12 }, { 12 }, { 12 }, { 16 }, { 16 }, { 16 }, { 16 }, { 16 }, { 16 }, { null }, { null }]])
+            EnumerableNestedLoopJoin(condition=[<($0, $3)], joinType=[inner])
+              EnumerableValues(tuples=[[{ 'val2a', 6, 12 }, { 'val1b', 10, 12 }, { 'val1b', 8, 16 }, { 'val1c', 12, 16 }, { 'val1b', null, 16 }, { 'val2e', 8, null }, { 'val1f', 19, null }, { 'val1b', 10, 12 }, { 'val1b', 8, 16 }, { 'val1c', 12, 16 }, { 'val1e', 8, null }, { 'val1f', 19, null }, { 'val1b', null, 16 }]])
+              EnumerableAggregate(group=[{0}])
+                EnumerableValues(tuples=[[{ 'val1a' }, { 'val1b' }, { 'val1a' }, { 'val1a' }, { 'val1c' }, { 'val1d' }, { 'val1d' }, { 'val1e' }, { 'val1e' }, { 'val1d' }, { 'val1a' }, { 'val1e' }]])
+!plan
+!}
+
+# [CALCITE-7584] LATERAL subquery with window function
+# this was validated using postgres
+SELECT *
+FROM calcite_7584_t1 t1 JOIN LATERAL
+  (SELECT SUM(t2.t2b) OVER (ORDER BY t2.t2b) AS window_sum
+   FROM calcite_7584_t2 t2
+   WHERE t2.t2b >= t1.t1b) AS t2_window ON TRUE
+order by 1,2,3,4,5;
++-------+-----+-----+-----+------------+
+| T1A   | T1B | T1C | T1D | WINDOW_SUM |
++-------+-----+-----+-----+------------+
+| val1a |   6 |   8 |  10 |          6 |
+| val1a |   6 |   8 |  10 |          6 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         38 |
+| val1a |   6 |   8 |  10 |         58 |
+| val1a |   6 |   8 |  10 |         58 |
+| val1a |   6 |   8 |  10 |         58 |
+| val1a |   6 |   8 |  10 |         58 |
+| val1a |   6 |   8 |  10 |         82 |
+| val1a |   6 |   8 |  10 |         82 |
+| val1a |   6 |   8 |  10 |         82 |
+| val1a |   6 |   8 |  10 |         82 |
+| val1a |   6 |   8 |  10 |        120 |
+| val1a |   6 |   8 |  10 |        120 |
+| val1a |   6 |   8 |  10 |        120 |
+| val1a |   6 |   8 |  10 |        120 |
+| val1a |  16 |  12 |  10 |         38 |
+| val1a |  16 |  12 |  10 |         38 |
+| val1a |  16 |  12 |  21 |         38 |
+| val1a |  16 |  12 |  21 |         38 |
+| val1b |   8 |  16 |  19 |         32 |
+| val1b |   8 |  16 |  19 |         32 |
+| val1b |   8 |  16 |  19 |         32 |
+| val1b |   8 |  16 |  19 |         32 |
+| val1b |   8 |  16 |  19 |         52 |
+| val1b |   8 |  16 |  19 |         52 |
+| val1b |   8 |  16 |  19 |         76 |
+| val1b |   8 |  16 |  19 |         76 |
+| val1b |   8 |  16 |  19 |        114 |
+| val1b |   8 |  16 |  19 |        114 |
+| val1c |   8 |  16 |  19 |         32 |
+| val1c |   8 |  16 |  19 |         32 |
+| val1c |   8 |  16 |  19 |         32 |
+| val1c |   8 |  16 |  19 |         32 |
+| val1c |   8 |  16 |  19 |         52 |
+| val1c |   8 |  16 |  19 |         52 |
+| val1c |   8 |  16 |  19 |         76 |
+| val1c |   8 |  16 |  19 |         76 |
+| val1c |   8 |  16 |  19 |        114 |
+| val1c |   8 |  16 |  19 |        114 |
+| val1d |  10 |     |  12 |         20 |
+| val1d |  10 |     |  12 |         20 |
+| val1d |  10 |     |  12 |         44 |
+| val1d |  10 |     |  12 |         44 |
+| val1d |  10 |     |  12 |         82 |
+| val1d |  10 |     |  12 |         82 |
+| val1e |  10 |     |  19 |         20 |
+| val1e |  10 |     |  19 |         20 |
+| val1e |  10 |     |  19 |         20 |
+| val1e |  10 |     |  19 |         20 |
+| val1e |  10 |     |  19 |         44 |
+| val1e |  10 |     |  19 |         44 |
+| val1e |  10 |     |  19 |         44 |
+| val1e |  10 |     |  19 |         44 |
+| val1e |  10 |     |  19 |         82 |
+| val1e |  10 |     |  19 |         82 |
+| val1e |  10 |     |  19 |         82 |
+| val1e |  10 |     |  19 |         82 |
+| val1e |  10 |     |  25 |         20 |
+| val1e |  10 |     |  25 |         20 |
+| val1e |  10 |     |  25 |         44 |
+| val1e |  10 |     |  25 |         44 |
+| val1e |  10 |     |  25 |         82 |
+| val1e |  10 |     |  25 |         82 |
++-------+-----+-----+-----+------------+
+(70 rows)
+
+!ok
+
+!if (use_old_decorr) {
+EnumerableSort(sort0=[$0], sort1=[$1], sort2=[$2], sort3=[$3], sort4=[$4], dir0=[ASC], dir1=[ASC], dir2=[ASC], dir3=[ASC], dir4=[ASC])
+  EnumerableCalc(expr#0..5=[{inputs}], proj#0..4=[{exprs}])
+    EnumerableHashJoin(condition=[=($1, $5)], joinType=[inner])
+      EnumerableValues(tuples=[[{ 'val1a', 6, 8, 10 }, { 'val1b', 8, 16, 19 }, { 'val1a', 16, 12, 21 }, { 'val1a', 16, 12, 10 }, { 'val1c', 8, 16, 19 }, { 'val1d', null, 16, 22 }, { 'val1d', null, 16, 19 }, { 'val1e', 10, null, 25 }, { 'val1e', 10, null, 19 }, { 'val1d', 10, null, 12 }, { 'val1a', 6, 8, 10 }, { 'val1e', 10, null, 19 }]])
+      EnumerableCalc(expr#0..3=[{inputs}], expr#4=[0:BIGINT], expr#5=[>($t2, $t4)], expr#6=[null:SMALLINT], expr#7=[CASE($t5, $t3, $t6)], WINDOW_SUM=[$t7], T1B=[$t1])
+        EnumerableWindow(window#0=[window(partition {1} order by [0] aggs [COUNT($0), $SUM0($0)])])
+          EnumerableNestedLoopJoin(condition=[>=($0, $1)], joinType=[inner])
+            EnumerableValues(tuples=[[{ 6 }, { 10 }, { 8 }, { 12 }, { null }, { 8 }, { 19 }, { 10 }, { 8 }, { 12 }, { 8 }, { 19 }, { null }]])
+            EnumerableAggregate(group=[{0}])
+              EnumerableValues(tuples=[[{ 6 }, { 8 }, { 16 }, { 16 }, { 8 }, { null }, { null }, { 10 }, { 10 }, { 10 }, { 6 }, { 10 }]])
+!plan
+!}
+
 # [CALCITE-7274] RexFieldAccess has wrong index when use trim unused fields
 !set trimfields true
 
@@ -8874,6 +9733,36 @@ ON t2.a = foo.a
 
 !ok
 
+# [CALCITE-7661] RelDecorrelator loses shared correlation constraint across inner join inputs
+# Both join inputs reference d.deptno; decorrelation must keep their correlation carriers equal.
+SELECT d.deptno
+FROM dept d
+WHERE EXISTS (
+  SELECT *
+  FROM (
+    SELECT *
+    FROM emp e
+    WHERE e.deptno = d.deptno
+  ) l
+  JOIN (
+    SELECT *
+    FROM dept d2
+    WHERE d2.deptno = d.deptno
+  ) r
+  ON TRUE
+)
+ORDER BY d.deptno;
++--------+
+| DEPTNO |
++--------+
+|     10 |
+|     20 |
+|     30 |
++--------+
+(3 rows)
+
+!ok
+
 # [CALCITE-7320] AggregateProjectMergeRule throws AssertionError when Project maps multiple grouping keys to the same field
 SELECT deptno,
        (SELECT SUM(cnt)
@@ -9237,4 +10126,1382 @@ SELECT deptno, dname > SOME(SELECT empno FROM emp) AS b FROM dept;
 For input string: "ACCOUNTING"
 !error
 
+# [CALCITE-7574] RelDecorrelator.isFieldNotNullRecursive throws
+# IndexOutOfBoundsException when decorrelating correlated scalar subquery
+# with Aggregate
+# Before fix: java.lang.IndexOutOfBoundsException: index out of range: 0
+SELECT t.deptno,
+  (SELECT COUNT(*) FROM emp e
+   WHERE e.deptno = t.deptno AND e.sal > t.s)
+FROM (SELECT deptno, SUM(sal) AS s FROM emp GROUP BY deptno) t;
++--------+--------+
+| DEPTNO | EXPR$1 |
++--------+--------+
+|     10 |      0 |
+|     20 |      0 |
+|     30 |      0 |
++--------+--------+
+(3 rows)
+
+!ok
+
+# [CALCITE-7540] Correlated outer reference in HAVING of grouped subquery is incorrectly reported as not grouped
+SELECT *
+FROM dept d
+INNER JOIN emp e
+  ON e.sal < (
+    SELECT MAX(e2.sal)
+    FROM emp e2
+    WHERE e2.job = e.job
+    GROUP BY e2.job
+    HAVING MIN(e2.deptno) = d.deptno
+  );
++--------+------------+----------+-------+--------+----------+------+------------+---------+---------+---------+
+| DEPTNO | DNAME      | LOC      | EMPNO | ENAME  | JOB      | MGR  | HIREDATE   | SAL     | COMM    | DEPTNO0 |
++--------+------------+----------+-------+--------+----------+------+------------+---------+---------+---------+
+|     10 | ACCOUNTING | NEW YORK |  7369 | SMITH  | CLERK    | 7902 | 1980-12-17 |  800.00 |         |      20 |
+|     10 | ACCOUNTING | NEW YORK |  7698 | BLAKE  | MANAGER  | 7839 | 1981-01-05 | 2850.00 |         |      30 |
+|     10 | ACCOUNTING | NEW YORK |  7782 | CLARK  | MANAGER  | 7839 | 1981-06-09 | 2450.00 |         |      10 |
+|     10 | ACCOUNTING | NEW YORK |  7876 | ADAMS  | CLERK    | 7788 | 1987-05-23 | 1100.00 |         |      20 |
+|     10 | ACCOUNTING | NEW YORK |  7900 | JAMES  | CLERK    | 7698 | 1981-12-03 |  950.00 |         |      30 |
+|     30 | SALES      | CHICAGO  |  7521 | WARD   | SALESMAN | 7698 | 1981-02-22 | 1250.00 |  500.00 |      30 |
+|     30 | SALES      | CHICAGO  |  7654 | MARTIN | SALESMAN | 7698 | 1981-09-28 | 1250.00 | 1400.00 |      30 |
+|     30 | SALES      | CHICAGO  |  7844 | TURNER | SALESMAN | 7698 | 1981-09-08 | 1500.00 |    0.00 |      30 |
++--------+------------+----------+-------+--------+----------+------+------------+---------+---------+---------+
+(8 rows)
+
+!ok
+
+# [CALCITE-709] LIMIT inside scalar sub-query
+SELECT E1.DEPTNO
+FROM EMP E1
+WHERE E1.SAL > (SELECT B1.COMM FROM BONUS B1 WHERE E1.ENAME = B1.ENAME LIMIT 2);
++--------+
+| DEPTNO |
++--------+
++--------+
+(0 rows)
+
+!ok
+
+# [CALCITE-4792] SqlToRel should populate corralateId for join with corralated query in ON condition.
+SELECT emp.ename, dept.dname
+FROM emp INNER JOIN dept
+ON emp.deptno = dept.deptno
+AND EXISTS (SELECT 1 FROM emp e2 WHERE e2.deptno = dept.deptno AND e2.sal > 2900)
+ORDER BY emp.ename;
++--------+------------+
+| ENAME  | DNAME      |
++--------+------------+
+| ADAMS  | RESEARCH   |
+| CLARK  | ACCOUNTING |
+| FORD   | RESEARCH   |
+| JONES  | RESEARCH   |
+| KING   | ACCOUNTING |
+| MILLER | ACCOUNTING |
+| SCOTT  | RESEARCH   |
+| SMITH  | RESEARCH   |
++--------+------------+
+(8 rows)
+
+!ok
+
+!use scott
+
+# Test case for [CALCITE-7334] Compiling the generated Java code throws an exception when
+# a scalar sub-query is used in the SELECT list.
+# Result validated against PostgreSQL 14.
+select
+        (SELECT
+          COUNT(*)
+        FROM
+           "scott".emp
+        WHERE
+           v.empno >= 2), 3
+from "scott".emp as v;
++--------+--------+
+| EXPR$0 | EXPR$1 |
++--------+--------+
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
+|     14 |      3 |
++--------+--------+
+(14 rows)
+
+!ok
 # End sub-query.iq
+
+# [CALCITE-7719] Field access on an element of a ROW array built by a
+# sub-query raises IllegalArgumentException.
+select t.a[1]."EXPR$0"."EXPR$1" as v
+from (select array(select ROW(ROW(1, 2), 3) from (values (0))) as a) as t;
++---+
+| V |
++---+
+| 2 |
++---+
+(1 row)
+
+!ok
+
+!set trimfields false
+
+# [CALCITE-7793] RelMdDistinctRowCount passes an Aggregate predicate to the
+# Aggregate's input without translating column references.
+# PostgreSQL 14.13 returns the same empty result for this query.
+with t(n, r) as (
+  values (1, cast(row(10) as row(d integer))),
+         (2, cast(row(20) as row(d integer)))
+)
+select e.n
+from t e
+where e.n > (
+  select avg(e2.n)
+  from t e2
+  where (e2.r).d = (e.r).d
+  and exists (
+     select 1
+     from (values (1, cast(row(10) as row(d integer)))) as b(k, br)
+     where b.k = e2.n
+     and (b.br).d = (e.r).d
+  )
+);
++---+
+| N |
++---+
++---+
+(0 rows)
+
+!ok
+!set trimfields true
+
+# [CALCITE-7821] Correlated query crashes SqlToRelConverter
+# The results of the following four queries were validated using Postgres.
+!set expand true
+with
+t(k, a) as (select * from (values (1, 10), (2, cast(null as int)), (3, 30), (4, 40), (5, cast(null as int)))),
+s(k, b) as (select * from (values (1, 10), (3, cast(null as int)), (4, 41), (5, 50)))
+select * from t where t.a not in (select s.b from s where s.k = t.k);
++---+----+
+| K | A  |
++---+----+
+| 2 |    |
+| 4 | 40 |
++---+----+
+(2 rows)
+
+!ok
+
+with
+t(k, a) as (select * from (values (1, 10), (2, cast(null as int)), (3, 30), (4, 40), (5, cast(null as int)))),
+s(k, b) as (select * from (values (1, 10), (3, cast(null as int)), (4, 41), (5, 50)))
+select k, a in (select s.b from s where s.k = t.k) as i from t;
++---+-------+
+| K | I     |
++---+-------+
+| 1 | true  |
+| 2 | false |
+| 3 |       |
+| 4 | false |
+| 5 |       |
++---+-------+
+(5 rows)
+
+!ok
+
+with
+t(k, a) as (select * from (values (1, 10), (2, cast(null as int)), (3, 30), (4, 40), (5, cast(null as int)))),
+s(k, b) as (select * from (values (1, 10), (3, cast(null as int)), (4, 41), (5, 50)))
+select k, a not in (select s.b from s where s.k = t.k) as ni from t;
++---+-------+
+| K | NI    |
++---+-------+
+| 1 | false |
+| 2 | true  |
+| 3 |       |
+| 4 | true  |
+| 5 |       |
++---+-------+
+(5 rows)
+
+!ok
+
+with
+t(a, k) as (select * from (values (10, 1), (cast(null as int), 2), (30, 3), (40, 4), (cast(null as int), 5))),
+s(k, b) as (select * from (values (1, 10), (3, cast(null as int)), (4, 41), (5, 50)))
+select k from t group by k having max(a) not in (select s.b from s where s.k = t.k);
++---+
+| K |
++---+
+| 2 |
+| 4 |
++---+
+(2 rows)
+
+!ok
+!set expand false
+
+# [CALCITE-7873] Correlated subqueries in ON JOIN conditions crash the
+# compiler with expand=true
+# The results of the following queries were validated using Postgres.
+!set expand true
+
+# Scalar and EXISTS sub-queries
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal = (select max(s.sal) from emp as s)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| KING  | ACCOUNTING |
++-------+------------+
+(1 row)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.mgr = (select max(s.mgr) from emp as s)
+order by d.dname;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| SMITH | ACCOUNTING |
+| SMITH | OPERATIONS |
+| SMITH | RESEARCH   |
+| SMITH | SALES      |
++-------+------------+
+(4 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.job = 'NOBODY')
+order by e.ename;
++-------+-------+
+| ENAME | DNAME |
++-------+-------+
++-------+-------+
+(0 rows)
+
+!ok
+
+# IN, key from the left input
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.empno in (select s.empno from emp as s where s.ename = 'SCOTT')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| SCOTT | RESEARCH |
++-------+----------+
+(1 row)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.empno in (select s.empno from emp as s where s.job = 'ANALYST')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| FORD  | RESEARCH |
+| SCOTT | RESEARCH |
++-------+----------+
+(2 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.mgr in (select s.mgr from emp as s where s.job = 'ANALYST')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| FORD  | RESEARCH |
+| SCOTT | RESEARCH |
++-------+----------+
+(2 rows)
+
+!ok
+
+# IN, key from the right input
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and d.deptno in (select s.deptno from emp as s where s.job = 'ANALYST')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| ADAMS | RESEARCH |
+| FORD  | RESEARCH |
+| JONES | RESEARCH |
+| SCOTT | RESEARCH |
+| SMITH | RESEARCH |
++-------+----------+
+(5 rows)
+
+!ok
+
+# Correlated sub-queries
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal = (select max(s.sal) from emp as s where s.deptno = d.deptno)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| FORD  | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(4 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal = (select max(s.sal) from emp as s where s.deptno = e.deptno)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| FORD  | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(4 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.job = 'ANALYST' and s.deptno = d.deptno)
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| ADAMS | RESEARCH |
+| FORD  | RESEARCH |
+| JONES | RESEARCH |
+| SCOTT | RESEARCH |
+| SMITH | RESEARCH |
++-------+----------+
+(5 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.mgr = e.empno)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(6 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.empno not in (select s.mgr from emp as s where s.deptno = d.deptno)
+order by e.ename;
++--------+----------+
+| ENAME  | DNAME    |
++--------+----------+
+| ADAMS  | RESEARCH |
+| ALLEN  | SALES    |
+| JAMES  | SALES    |
+| MARTIN | SALES    |
+| SMITH  | RESEARCH |
+| TURNER | SALES    |
+| WARD   | SALES    |
++--------+----------+
+(7 rows)
+
+!ok
+
+# Nested joins, two sub-queries, join inside a sub-query
+select e.ename, d.dname, x.loc
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal = (select max(s.sal) from emp as s)
+join dept as x on x.deptno = d.deptno
+order by e.ename;
++-------+------------+----------+
+| ENAME | DNAME      | LOC      |
++-------+------------+----------+
+| KING  | ACCOUNTING | NEW YORK |
++-------+------------+----------+
+(1 row)
+
+!ok
+
+select e.ename, m.ename as mname
+from emp as e join dept as d
+on e.deptno = d.deptno
+join emp as m
+on m.empno = e.mgr
+  and m.sal = (select max(s.sal) from emp as s where s.deptno = d.deptno)
+order by e.ename;
++--------+-------+
+| ENAME  | MNAME |
++--------+-------+
+| ADAMS  | SCOTT |
+| ALLEN  | BLAKE |
+| CLARK  | KING  |
+| JAMES  | BLAKE |
+| MARTIN | BLAKE |
+| SMITH  | FORD  |
+| TURNER | BLAKE |
+| WARD   | BLAKE |
++--------+-------+
+(8 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.mgr in (select s.empno from emp as s where s.job = 'MANAGER')
+  and d.deptno in (select s.deptno from emp as s where s.job = 'ANALYST')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| FORD  | RESEARCH |
+| SCOTT | RESEARCH |
++-------+----------+
+(2 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.mgr = e.empno and s.deptno = d.deptno)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(6 rows)
+
+!ok
+
+select d.dname
+from dept as d
+where exists (
+  select 1 from emp as e join emp as m
+  on m.empno = e.mgr and m.sal = (select max(s.sal) from emp as s)
+  where e.deptno = d.deptno)
+order by d.dname;
++------------+
+| DNAME      |
++------------+
+| ACCOUNTING |
+| RESEARCH   |
+| SALES      |
++------------+
+(3 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.mgr not in (select s.mgr from emp as s where s.job = 'CLERK')
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| SCOTT | RESEARCH   |
++-------+------------+
+(5 rows)
+
+!ok
+
+# Several sub-queries in one ON, OR, NOT EXISTS, GROUP BY, IN lists,
+# LATERAL, a sub-query in FROM, composite keys, and correlation with
+# an outer query
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal < (select max(s.sal) from emp as s)
+  and exists (select 1 from emp as s where s.mgr = e.empno)
+  and e.mgr not in (select s.mgr from emp as s where s.job = 'CLERK')
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| SCOTT | RESEARCH   |
++-------+------------+
+(5 rows)
+
+!ok
+
+select e.ename, d.dname, m.ename as mname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and d.deptno in (select s.deptno from emp as s where s.job = 'ANALYST')
+join emp as m
+on m.empno = e.mgr
+  and m.sal > (select avg(s.sal) from emp as s)
+order by e.ename;
++-------+----------+-------+
+| ENAME | DNAME    | MNAME |
++-------+----------+-------+
+| ADAMS | RESEARCH | SCOTT |
+| FORD  | RESEARCH | JONES |
+| JONES | RESEARCH | KING  |
+| SCOTT | RESEARCH | JONES |
+| SMITH | RESEARCH | FORD  |
++-------+----------+-------+
+(5 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and (e.comm > 0 or e.empno in (select s.mgr from emp as s))
+order by e.ename;
++--------+------------+
+| ENAME  | DNAME      |
++--------+------------+
+| ALLEN  | SALES      |
+| BLAKE  | SALES      |
+| CLARK  | ACCOUNTING |
+| FORD   | RESEARCH   |
+| JONES  | RESEARCH   |
+| KING   | ACCOUNTING |
+| MARTIN | SALES      |
+| SCOTT  | RESEARCH   |
+| WARD   | SALES      |
++--------+------------+
+(9 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and not exists (select 1 from emp as s where s.mgr = e.empno)
+order by e.ename;
++--------+------------+
+| ENAME  | DNAME      |
++--------+------------+
+| ADAMS  | RESEARCH   |
+| ALLEN  | SALES      |
+| JAMES  | SALES      |
+| MARTIN | SALES      |
+| MILLER | ACCOUNTING |
+| SMITH  | RESEARCH   |
+| TURNER | SALES      |
+| WARD   | SALES      |
++--------+------------+
+(8 rows)
+
+!ok
+
+select d.dname, count(*) as c
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal > (select avg(s.sal) from emp as s)
+group by d.dname
+order by d.dname;
++------------+---+
+| DNAME      | C |
++------------+---+
+| ACCOUNTING | 2 |
+| RESEARCH   | 3 |
+| SALES      | 1 |
++------------+---+
+(3 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.empno in (7369, 7499, 7521, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15, 16, 17, 18)
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| ALLEN | SALES    |
+| SMITH | RESEARCH |
+| WARD  | SALES    |
++-------+----------+
+(3 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.empno in (7369, 7499)
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| ALLEN | SALES    |
+| SMITH | RESEARCH |
++-------+----------+
+(2 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e
+join lateral (select * from dept as x where x.deptno = e.deptno) as d
+on d.loc in (select x.loc from dept as x where x.dname <> 'SALES')
+  and e.sal > (select avg(s.sal) from emp as s)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(5 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join (select deptno, dname from dept where deptno < 40) as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.mgr = e.empno and s.job = 'CLERK')
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| BLAKE | SALES      |
+| CLARK | ACCOUNTING |
+| FORD  | RESEARCH   |
+| SCOTT | RESEARCH   |
++-------+------------+
+(4 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and (e.deptno, e.job) in (select s.deptno, s.job from emp as s where s.sal > 2900)
+order by e.ename;
++-------+------------+
+| ENAME | DNAME      |
++-------+------------+
+| FORD  | RESEARCH   |
+| JONES | RESEARCH   |
+| KING  | ACCOUNTING |
+| SCOTT | RESEARCH   |
++-------+------------+
+(4 rows)
+
+!ok
+
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and (e.deptno, e.job) not in (select s.deptno, s.job from emp as s where s.sal > 2900)
+order by e.ename;
++--------+------------+
+| ENAME  | DNAME      |
++--------+------------+
+| ADAMS  | RESEARCH   |
+| ALLEN  | SALES      |
+| BLAKE  | SALES      |
+| CLARK  | ACCOUNTING |
+| JAMES  | SALES      |
+| MARTIN | SALES      |
+| MILLER | ACCOUNTING |
+| SMITH  | RESEARCH   |
+| TURNER | SALES      |
+| WARD   | SALES      |
++--------+------------+
+(10 rows)
+
+!ok
+
+select count(*) as c
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and d.deptno in (select s.deptno from emp as s);
++----+
+| C  |
++----+
+| 14 |
++----+
+(1 row)
+
+!ok
+
+select d.dname
+from dept as d
+where exists (
+  select 1 from emp as e join emp as m
+  on m.empno = e.mgr
+    and m.job in (select s.job from emp as s
+      where s.deptno = d.deptno and s.job = 'PRESIDENT')
+  where e.deptno = d.deptno)
+order by d.dname;
++------------+
+| DNAME      |
++------------+
+| ACCOUNTING |
++------------+
+(1 row)
+
+!ok
+
+# Sub-queries in the ON clause and in WHERE, SELECT or HAVING
+select e.ename, d.dname
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal > (select avg(s.sal) from emp as s)
+where exists (select 1 from emp as s where s.deptno = d.deptno and s.job = 'ANALYST')
+order by e.ename;
++-------+----------+
+| ENAME | DNAME    |
++-------+----------+
+| FORD  | RESEARCH |
+| JONES | RESEARCH |
+| SCOTT | RESEARCH |
++-------+----------+
+(3 rows)
+
+!ok
+
+select e.ename, (select count(*) from emp as s where s.deptno = d.deptno) as c
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal = (select max(s.sal) from emp as s where s.job = 'ANALYST')
+order by e.ename;
++-------+---+
+| ENAME | C |
++-------+---+
+| FORD  | 5 |
+| SCOTT | 5 |
++-------+---+
+(2 rows)
+
+!ok
+
+select d.dname, count(*) as c
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.mgr in (select s.empno from emp as s where s.job = 'MANAGER')
+group by d.dname
+having count(*) > (select count(*) from dept as y where y.loc = 'BOSTON')
+order by d.dname;
++----------+---+
+| DNAME    | C |
++----------+---+
+| RESEARCH | 2 |
+| SALES    | 5 |
++----------+---+
+(2 rows)
+
+!ok
+
+select e.ename, x.loc
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal > (select avg(s.sal) from emp as s)
+join dept as x on x.deptno = d.deptno
+where exists (select 1 from emp as s where s.deptno = x.deptno and s.job = 'PRESIDENT')
+order by e.ename;
++-------+----------+
+| ENAME | LOC      |
++-------+----------+
+| CLARK | NEW YORK |
+| KING  | NEW YORK |
++-------+----------+
+(2 rows)
+
+!ok
+
+# A scalar sub-query and a correlated EXISTS, in both orders
+select e.ename
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and e.sal < (select max(s.sal) from emp as s)
+  and exists (select 1 from emp as s where s.mgr = e.empno)
+order by e.ename;
++-------+
+| ENAME |
++-------+
+| BLAKE |
+| CLARK |
+| FORD  |
+| JONES |
+| SCOTT |
++-------+
+(5 rows)
+
+!ok
+
+select e.ename
+from emp as e join dept as d
+on e.deptno = d.deptno
+  and exists (select 1 from emp as s where s.mgr = e.empno)
+  and e.sal < (select max(s.sal) from emp as s)
+order by e.ename;
++-------+
+| ENAME |
++-------+
+| BLAKE |
+| CLARK |
+| FORD  |
+| JONES |
+| SCOTT |
++-------+
+(5 rows)
+
+!ok
+
+# A query equivalent to SqlToRelConverterTest.testJoinExpandAndDecorrelation
+select emp.deptno, emp.sal
+from dept
+join emp on emp.deptno = dept.deptno and emp.sal < (
+  select avg(emp.sal)
+  from emp
+  where emp.deptno = dept.deptno)
+order by emp.deptno, emp.sal;
++--------+---------+
+| DEPTNO | SAL     |
++--------+---------+
+|     10 | 1300.00 |
+|     10 | 2450.00 |
+|     20 |  800.00 |
+|     20 | 1100.00 |
+|     30 |  950.00 |
+|     30 | 1250.00 |
+|     30 | 1250.00 |
+|     30 | 1500.00 |
++--------+---------+
+(8 rows)
+
+!ok
+!set expand false
+
+# [CALCITE-7885] RelDecorrelator merges distinct correlation fields and produces extra rows
+# The result of this query was validated using Postgres.
+with t(x, y) as (values (1, 1), (2, 1)),
+     s(z) as (values (1))
+select t.x, t.y,
+  (select count(*) from s where s.z = t.x and s.z = t.y) as c
+from t;
++---+---+---+
+| X | Y | C |
++---+---+---+
+| 1 | 1 | 1 |
+| 2 | 1 | 0 |
++---+---+---+
+(2 rows)
+
+!ok
+
+# [CALCITE-7887] SubQueryRemoveRule fails for a sub-query inside a window function
+# IN sub-query inside the argument of a windowed aggregate.
+# The result of this query was validated using Postgres.
+SELECT empno,
+  SUM(CASE WHEN deptno IN (SELECT deptno FROM dept WHERE deptno < 30) THEN 1 ELSE 0 END)
+    OVER (ORDER BY empno) AS s
+FROM emp
+WHERE empno < 7600;
++-------+---+
+| EMPNO | S |
++-------+---+
+|  7369 | 1 |
+|  7499 | 1 |
+|  7521 | 1 |
+|  7566 | 2 |
++-------+---+
+(4 rows)
+
+!ok
+
+# Correlated EXISTS sub-query inside the argument of a windowed aggregate that has a PARTITION BY.
+SELECT empno, deptno,
+  COUNT(CASE WHEN EXISTS (SELECT 1 FROM emp AS e2 WHERE e2.mgr = e.empno) THEN 1 END)
+    OVER (PARTITION BY deptno) AS c
+FROM emp AS e
+ORDER BY empno;
++-------+--------+---+
+| EMPNO | DEPTNO | C |
++-------+--------+---+
+|  7369 |     20 | 3 |
+|  7499 |     30 | 1 |
+|  7521 |     30 | 1 |
+|  7566 |     20 | 3 |
+|  7654 |     30 | 1 |
+|  7698 |     30 | 1 |
+|  7782 |     10 | 2 |
+|  7788 |     20 | 3 |
+|  7839 |     10 | 2 |
+|  7844 |     30 | 1 |
+|  7876 |     20 | 3 |
+|  7900 |     30 | 1 |
+|  7902 |     20 | 3 |
+|  7934 |     10 | 2 |
++-------+--------+---+
+(14 rows)
+
+!ok
+
+# Correlated scalar sub-query as the argument of a windowed aggregate.
+SELECT empno,
+  SUM((SELECT COUNT(*) FROM emp AS e2 WHERE e2.mgr = e.empno))
+    OVER (ORDER BY empno) AS s
+FROM emp AS e
+WHERE deptno = 20
+ORDER BY empno;
++-------+---+
+| EMPNO | S |
++-------+---+
+|  7369 | 0 |
+|  7566 | 2 |
+|  7788 | 3 |
+|  7876 | 3 |
+|  7902 | 4 |
++-------+---+
+(5 rows)
+
+!ok
+
+# IN sub-query in the PARTITION BY clause of a window.
+SELECT empno, deptno,
+  COUNT(*) OVER (PARTITION BY deptno IN (SELECT deptno FROM dept WHERE dname = 'SALES')) AS c
+FROM emp
+ORDER BY empno;
++-------+--------+---+
+| EMPNO | DEPTNO | C |
++-------+--------+---+
+|  7369 |     20 | 8 |
+|  7499 |     30 | 6 |
+|  7521 |     30 | 6 |
+|  7566 |     20 | 8 |
+|  7654 |     30 | 6 |
+|  7698 |     30 | 6 |
+|  7782 |     10 | 8 |
+|  7788 |     20 | 8 |
+|  7839 |     10 | 8 |
+|  7844 |     30 | 6 |
+|  7876 |     20 | 8 |
+|  7900 |     30 | 6 |
+|  7902 |     20 | 8 |
+|  7934 |     10 | 8 |
++-------+--------+---+
+(14 rows)
+
+!ok
+
+# Correlated EXISTS sub-query in the ORDER BY clause of a window.
+SELECT empno,
+  ROW_NUMBER() OVER (ORDER BY EXISTS (SELECT 1 FROM emp AS e2 WHERE e2.mgr = e.empno) DESC,
+    empno) AS rn
+FROM emp AS e
+WHERE deptno = 20
+ORDER BY empno;
++-------+----+
+| EMPNO | RN |
++-------+----+
+|  7369 |  4 |
+|  7566 |  1 |
+|  7788 |  2 |
+|  7876 |  5 |
+|  7902 |  3 |
++-------+----+
+(5 rows)
+
+!ok
+
+# NOT IN sub-query whose result is UNKNOWN (the sub-query
+# returns a NULL) inside a windowed COUNT. COUNT ignores UNKNOWN values,
+# so the sub-query must be expanded using three-valued logic.
+SELECT empno,
+  COUNT(deptno NOT IN (SELECT mgr FROM emp)) OVER () AS c1,
+  COUNT(*) OVER () AS c2
+FROM emp
+WHERE deptno = 10
+ORDER BY empno;
++-------+----+----+
+| EMPNO | C1 | C2 |
++-------+----+----+
+|  7782 |  0 |  3 |
+|  7839 |  0 |  3 |
+|  7934 |  0 |  3 |
++-------+----+----+
+(3 rows)
+
+!ok
+
+# Two sub-queries in the same window: one in the argument of
+# the aggregate, one in the PARTITION BY clause.
+SELECT empno,
+  SUM(CASE WHEN EXISTS (SELECT 1 FROM emp AS e2 WHERE e2.mgr = e.empno) THEN 1 ELSE 0 END)
+    OVER (PARTITION BY deptno IN (SELECT deptno FROM dept WHERE loc = 'DALLAS')
+          ORDER BY empno) AS s
+FROM emp AS e
+ORDER BY empno;
++-------+---+
+| EMPNO | S |
++-------+---+
+|  7369 | 0 |
+|  7499 | 0 |
+|  7521 | 0 |
+|  7566 | 1 |
+|  7654 | 0 |
+|  7698 | 1 |
+|  7782 | 2 |
+|  7788 | 2 |
+|  7839 | 3 |
+|  7844 | 3 |
+|  7876 | 2 |
+|  7900 | 3 |
+|  7902 | 3 |
+|  7934 | 3 |
++-------+---+
+(14 rows)
+
+!ok
+
+# [CALCITE-7887] SubQueryRemoveRule fails for a sub-query inside a window function
+# SELECT list with a sub-query correlated to the current scope followed by
+# one correlated to an outer scope. SubQueryRemoveRule used to rewrite one
+# sub-query of a Project per call, so the second one was bound to the inner
+# input instead of DEPT ("Correlation variable $cor1 should be defined").
+select d.dname,
+  (select max((select count(*) from emp as s where s.mgr = e.empno)
+       + (select count(*) from emp as s where s.deptno = d.deptno))
+   from emp as e) as c
+from dept as d
+order by d.dname;
++------------+----+
+| DNAME      | C  |
++------------+----+
+| ACCOUNTING |  8 |
+| OPERATIONS |  5 |
+| RESEARCH   | 10 |
+| SALES      | 11 |
++------------+----+
+(4 rows)
+
+!ok
+
+# The same sub-queries in the other order
+select d.dname,
+  (select max((select count(*) from emp as s where s.deptno = d.deptno)
+       + (select count(*) from emp as s where s.mgr = e.empno))
+   from emp as e) as c
+from dept as d
+order by d.dname;
++------------+----+
+| DNAME      | C  |
++------------+----+
+| ACCOUNTING |  8 |
+| OPERATIONS |  5 |
+| RESEARCH   | 10 |
+| SALES      | 11 |
++------------+----+
+(4 rows)
+
+!ok
+
+# Several sub-queries of different kinds in one SELECT list, each adding
+# auxiliary fields to the input
+select e.ename,
+  (select count(*) from emp as s where s.mgr = e.empno) as c1,
+  e.sal < (select max(s.sal) from emp as s) as c2,
+  exists (select 1 from emp as s where s.mgr = e.empno) as c3,
+  e.deptno in (select d.deptno from dept as d where d.loc = 'DALLAS') as c4,
+  e.mgr not in (select s.mgr from emp as s where s.job = 'CLERK') as c5
+from emp as e
+order by e.ename;
++--------+----+-------+-------+-------+-------+
+| ENAME  | C1 | C2    | C3    | C4    | C5    |
++--------+----+-------+-------+-------+-------+
+| ADAMS  |  0 | true  | false | true  | false |
+| ALLEN  |  0 | true  | false | false | false |
+| BLAKE  |  5 | true  | true  | false | true  |
+| CLARK  |  1 | true  | true  | false | true  |
+| FORD   |  1 | true  | true  | true  | true  |
+| JAMES  |  0 | true  | false | false | false |
+| JONES  |  2 | true  | true  | true  | true  |
+| KING   |  3 | false | true  | false |       |
+| MARTIN |  0 | true  | false | false | false |
+| MILLER |  0 | true  | false | false | false |
+| SCOTT  |  1 | true  | true  | true  | true  |
+| SMITH  |  0 | true  | false | true  | false |
+| TURNER |  0 | true  | false | false | false |
+| WARD   |  0 | true  | false | false | false |
++--------+----+-------+-------+-------+-------+
+(14 rows)
+
+!ok
+
+# [CALCITE-2136] SubQueryRemoveRule.Project generated error plan
+# This sql program was validated in PostgreSQL
+select t1.ename as name,
+  (select count(1) from emp t2 where t2.ename = t1.ename) as c
+from emp t1
+order by t1.ename;
++--------+---+
+| NAME   | C |
++--------+---+
+| ADAMS  | 1 |
+| ALLEN  | 1 |
+| BLAKE  | 1 |
+| CLARK  | 1 |
+| FORD   | 1 |
+| JAMES  | 1 |
+| JONES  | 1 |
+| KING   | 1 |
+| MARTIN | 1 |
+| MILLER | 1 |
+| SCOTT  | 1 |
+| SMITH  | 1 |
+| TURNER | 1 |
+| WARD   | 1 |
++--------+---+
+(14 rows)
+
+!ok
+
+# [CALCITE-7930] Correlated sub-query with ROLLUP or GROUPING SETS loses the
+# () group when the sub-query input is empty
+# The next 4 queries belong to CALCITE-7930: 2 queries, each run with
+# expand false and with expand true, because the top-down decorrelator
+# fails in both modes.
+# G is the number of groups for each department. DEPT 40 has no employees,
+# so only the () group remains, and G is 1.
+!set expand false
+
+# Query 1 of 4: ROLLUP(job), expand false.
+# Validated: PostgreSQL 14 gives the same rows.
+select deptno,
+  (select count(*) from
+     (select count(*) as n from emp where emp.deptno = dept.deptno
+      group by rollup(job)) as t) as g
+from dept;
++--------+---+
+| DEPTNO | G |
++--------+---+
+|     10 | 4 |
+|     20 | 4 |
+|     30 | 4 |
+|     40 | 1 |
++--------+---+
+(4 rows)
+
+!ok
+
+# Query 2 of 4: GROUPING SETS ((job), (mgr), ()), expand false.
+# Validated: PostgreSQL 14 gives the same rows.
+select deptno,
+  (select count(*) from
+     (select count(*) as n from emp where emp.deptno = dept.deptno
+      group by grouping sets ((job), (mgr), ())) as t) as g
+from dept;
++--------+---+
+| DEPTNO | G |
++--------+---+
+|     10 | 7 |
+|     20 | 8 |
+|     30 | 6 |
+|     40 | 1 |
++--------+---+
+(4 rows)
+
+!ok
+
+!set expand true
+
+# Query 3 of 4: ROLLUP(job), expand true.
+# Validated: PostgreSQL 14 gives the same rows.
+select deptno,
+  (select count(*) from
+     (select count(*) as n from emp where emp.deptno = dept.deptno
+      group by rollup(job)) as t) as g
+from dept;
++--------+---+
+| DEPTNO | G |
++--------+---+
+|     10 | 4 |
+|     20 | 4 |
+|     30 | 4 |
+|     40 | 1 |
++--------+---+
+(4 rows)
+
+!ok
+
+# Query 4 of 4: GROUPING SETS ((job), (mgr), ()), expand true.
+# Validated: PostgreSQL 14 gives the same rows.
+select deptno,
+  (select count(*) from
+     (select count(*) as n from emp where emp.deptno = dept.deptno
+      group by grouping sets ((job), (mgr), ())) as t) as g
+from dept;
++--------+---+
+| DEPTNO | G |
++--------+---+
+|     10 | 7 |
+|     20 | 8 |
+|     30 | 6 |
+|     40 | 1 |
++--------+---+
+(4 rows)
+
+!ok
+
+!set expand false
+
+# [CALCITE-7929] RelDecorrelator replaces an uncorrelated EXISTS with TRUE
+# when the query also has a correlated sub-query.
+# The expected output of each of the next 5 queries was validated in two
+# ways: PostgreSQL 14 with the same EMP and DEPT rows gives the same
+# result, and so does Calcite with the top-down decorrelator.
+
+# No employee earns more than 10000, so E is FALSE in each row
+select deptno,
+  exists (select 1 from emp where sal > 10000) as e,
+  exists (select 1 from emp where emp.deptno = dept.deptno) as ec
+from dept;
++--------+-------+-------+
+| DEPTNO | E     | EC    |
++--------+-------+-------+
+|     10 | false | true  |
+|     20 | false | true  |
+|     30 | false | true  |
+|     40 | false | false |
++--------+-------+-------+
+(4 rows)
+
+!ok
+
+# Same sub-queries in WHERE: the uncorrelated EXISTS is FALSE, so no rows
+select deptno
+from dept
+where exists (select 1 from emp where sal > 10000)
+  and exists (select 1 from emp where emp.deptno = dept.deptno);
++--------+
+| DEPTNO |
++--------+
++--------+
+(0 rows)
+
+!ok
+
+# GROUP BY a constant over an empty input gives no group, so C is NULL.
+# PostgreSQL rejects GROUP BY 'a', so it ran with GROUP BY 'a'::text.
+select deptno,
+  (select count(*) from emp where sal > 10000 group by 'a') as c,
+  exists (select 1 from emp where emp.deptno = dept.deptno) as ec
+from dept;
++--------+---+-------+
+| DEPTNO | C | EC    |
++--------+---+-------+
+|     10 |   | true  |
+|     20 |   | true  |
+|     30 |   | true  |
+|     40 |   | false |
++--------+---+-------+
+(4 rows)
+
+!ok
+
+# The uncorrelated EXISTS inside the correlated sub-query is FALSE,
+# so EC is FALSE in each row
+select deptno,
+  exists (select 1 from emp where emp.deptno = dept.deptno
+          and exists (select 1 from emp where sal > 10000)) as ec
+from dept;
++--------+-------+
+| DEPTNO | EC    |
++--------+-------+
+|     10 | false |
+|     20 | false |
+|     30 | false |
+|     40 | false |
++--------+-------+
+(4 rows)
+
+!ok
+
+# ROLLUP mixes a constant key and a non-constant key. The sub-query is
+# uncorrelated, so the constant key must stay; dropping it made the
+# grouping sets invalid. PostgreSQL ran it with ROLLUP('a'::text, job).
+select deptno,
+  (select count(*) from (select job from emp
+                         group by rollup('a', job)) t) as c,
+  exists (select 1 from emp where emp.deptno = dept.deptno) as ec
+from dept;
++--------+---+-------+
+| DEPTNO | C | EC    |
++--------+---+-------+
+|     10 | 7 | true  |
+|     20 | 7 | true  |
+|     30 | 7 | true  |
+|     40 | 7 | false |
++--------+---+-------+
+(4 rows)
+
+!ok

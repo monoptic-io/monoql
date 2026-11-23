@@ -221,7 +221,10 @@ public class CoreRules {
 
   /** Rule that reduces operations on the DECIMAL type, such as casts or
    * arithmetic, into operations involving more primitive types such as BIGINT
-   * and DOUBLE. */
+   * and DOUBLE.
+   *
+   * @deprecated See {@link ReduceDecimalsRule}. */
+  @Deprecated // to be removed before 2.0
   public static final ReduceDecimalsRule CALC_REDUCE_DECIMALS =
       ReduceDecimalsRule.Config.DEFAULT.toRule();
 
@@ -518,6 +521,16 @@ public class CoreRules {
   public static final SubQueryRemoveRule JOIN_SUB_QUERY_TO_CORRELATE =
       SubQueryRemoveRule.Config.JOIN.toRule();
 
+  /** Rule that converts scalar sub-queries from table function arguments into
+   * {@link Correlate} instances.
+   *
+   * @see #PROJECT_SUB_QUERY_TO_CORRELATE
+   * @see #FILTER_SUB_QUERY_TO_CORRELATE
+   * @see #JOIN_SUB_QUERY_TO_CORRELATE */
+  public static final SubQueryRemoveRule
+      TABLE_FUNCTION_SCAN_SCALAR_QUERY_TO_CORRELATE =
+      SubQueryRemoveRule.Config.TABLE_FUNCTION_SCAN_SCALAR_QUERY.toRule();
+
   /** Rule that converts sub-queries from filter expressions into
    * {@link Correlate} instances. It will rewrite SOME/EXISTS/IN to a LEFT MARK type Correlate. */
   public static final SubQueryRemoveRule FILTER_SUB_QUERY_TO_MARK_CORRELATE =
@@ -654,6 +667,11 @@ public class CoreRules {
   public static final JoinExtractFilterRule JOIN_EXTRACT_FILTER =
       JoinExtractFilterRule.Config.DEFAULT.toRule();
 
+  /** Rule that pulls an {@link Aggregate} from the left input of a
+   * {@link Join} to above the join (group-by pull up). */
+  public static final JoinAggregateTransposeRule JOIN_AGGREGATE_TRANSPOSE =
+      JoinAggregateTransposeRule.Config.DEFAULT.toRule();
+
   /** Rule that matches a {@link LogicalJoin} whose inputs are
    * {@link LogicalProject}s, and pulls the project expressions up. */
   public static final JoinProjectTransposeRule JOIN_PROJECT_BOTH_TRANSPOSE =
@@ -734,6 +752,11 @@ public class CoreRules {
    * @see #PROJECT_TO_SEMI_JOIN */
   public static final SemiJoinRule.JoinToSemiJoinRule JOIN_TO_SEMI_JOIN =
       SemiJoinRule.JoinToSemiJoinRule.JoinToSemiJoinRuleConfig.DEFAULT.toRule();
+
+  /** Rule that converts an outer join followed by {@code IS NULL} on its
+   * null-generating side to an anti join. */
+  public static final OuterJoinToAntiJoinRule OUTER_JOIN_TO_ANTI_JOIN =
+      OuterJoinToAntiJoinRule.Config.DEFAULT.toRule();
 
   /** Rule that pushes a {@link Join}
    * past a non-distinct {@link Union} as its left input. */
@@ -984,6 +1007,28 @@ public class CoreRules {
    *  into equivalent {@link Union} ALL of GROUP BY operations. */
   public static final AggregateGroupingSetsToUnionRule AGGREGATE_GROUPING_SETS_TO_UNION =
       AggregateGroupingSetsToUnionRule.Config.DEFAULT.toRule();
+
+  /** Rule that removes {@code LITERAL_AGG} aggregate calls by replacing them
+   * with literal expressions in a {@link Project}. */
+  public static final AggregateRemoveLiteralAggRule AGGREGATE_REMOVE_LITERAL_AGG =
+      AggregateRemoveLiteralAggRule.Config.DEFAULT.toRule();
+
+  /** Rule that moves the outer join semantics of a {@link Correlate} over an
+   * {@link Uncollect} onto the {@code Uncollect}, leaving an inner
+   * {@code Correlate} that {@link #UNNEST_DECORRELATE} may then remove. */
+  public static final CorrelateUncollectMergeRule CORRELATE_UNCOLLECT_OUTER =
+      CorrelateUncollectMergeRule.Config.OUTER.toRule();
+
+  /** Rule that converts a {@link Correlate} over an {@link Uncollect} into a
+   * single, generalized {@link Uncollect} that preserves the correlate's full
+   * output via passthrough fields. */
+  public static final CorrelateUncollectMergeRule CORRELATE_UNCOLLECT_MERGE =
+      CorrelateUncollectMergeRule.Config.DEFAULT.toRule();
+
+  /** Rule that narrows an {@link Uncollect} to the columns referenced by the
+   * {@link Project} above it. */
+  public static final ProjectUncollectMergeRule PROJECT_UNCOLLECT_MERGE =
+      ProjectUncollectMergeRule.Config.DEFAULT.toRule();
 
   /** Rule that converts a {@link Correlate} after an {@link Uncollect} into a simple
    * Uncollect, if possible. */

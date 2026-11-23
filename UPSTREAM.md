@@ -9,13 +9,15 @@ taken. The intended reader is whoever does the next merge, human or agent.
 | | |
 |---|---|
 | Upstream | `https://github.com/apache/calcite.git`, remote `upstream` |
-| Base | tag `calcite-1.42.0` (commit `c01f6b551`) |
+| Base | `upstream/main` at commit `020e0e2cf` (2026-11-20): `calcite-1.42.0` plus 397 commits, unreleased, versioned 1.43.0 |
 | Recorded in | `calcite.version` in `gradle.properties` |
 | Fork branch | `main` |
 | Upstream branch | `upstream-main` tracks `upstream/main` |
 
 The repository has upstream's full history, so `git merge` and `git log
-calcite-1.42.0..` work as they would in any fork.
+020e0e2cf..upstream/main` work as they would in any fork. The fork began at
+`calcite-1.42.0`; there was no later release to merge, so the first merge
+took `main`.
 
 ## The policy
 
@@ -94,6 +96,8 @@ Everything monoql does not use:
 - Two tests in core that tested removed things: `SqlLineTest`, and
   `DocumentationTest`, which checked the website's SQL reference.
 - The JDBC integration-test tasks in core (`integTestH2` and friends).
+- `AGENTS.md` and `SECURITY.md`, which describe upstream's process, and the
+  `asmchecker` build plugin (a bytecode check wired into upstream's build).
 
 ### The build was rewritten
 
@@ -163,6 +167,8 @@ upstream's improvements and monoql's invariants both intact.
    - **Build files.** Keep ours. Then read upstream's diff for anything the
      code needs: a new dependency or version bump (apply it to `bom` and
      `gradle.properties`), a new generated source, a new test setting.
+     Git may also "move" files that upstream added in a deleted module into
+     `legacy-jdbc` (a file-location conflict); delete those too.
    - **The core files listed above.** The comment marked `monoql:` says what
      has to stay true. If upstream has rewritten the code around it,
      re-derive the change from its purpose rather than forcing the old diff
@@ -180,7 +186,7 @@ upstream's improvements and monoql's invariants both intact.
    file under `site/`). Delete them and list them above.
 8. Update `calcite.version` in `gradle.properties`, the version in
    `legacy-jdbc`'s `CalciteDriverVersion`, and "Where we are" above.
-9. `./gradlew build`. At the base that is 17,759 Calcite tests (core,
+9. `./gradlew build`. At the base that is 19,739 Calcite tests (core,
    linq4j, testkit) and 185 monoql tests, with no failures. Compare any
    failure against upstream's own results for the tag before assuming the
    merge caused it.

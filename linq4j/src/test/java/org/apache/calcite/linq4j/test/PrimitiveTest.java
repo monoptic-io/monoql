@@ -20,17 +20,19 @@ import org.apache.calcite.linq4j.tree.Primitive;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasToString;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Unit test for {@link Primitive}.
@@ -117,28 +119,18 @@ class PrimitiveTest {
     assertThat(number, instanceOf(Float.class));
     assertThat(number.doubleValue(), is(2.0d));
 
-    try {
-      number = Primitive.INT.number(null);
-      fail("expected exception, got " + number);
-    } catch (NullPointerException e) {
-      // ok
-    }
+    assertThrows(NullPointerException.class, () ->
+        Primitive.INT.number(null));
 
     // not a number
-    try {
-      number = Primitive.CHAR.number(3);
-      fail("expected exception, got " + number);
-    } catch (AssertionError e) {
-      assertThat(e.getMessage(), is("CHAR: 3"));
-    }
+    Throwable e = assertThrows(AssertionError.class, () ->
+        Primitive.CHAR.number(3));
+    assertThat(e.getMessage(), is("CHAR: 3"));
 
     // not a number
-    try {
-      number = Primitive.BOOLEAN.number(null);
-      fail("expected exception, got " + number);
-    } catch (AssertionError e) {
-      assertThat(e.getMessage(), is("BOOLEAN: null"));
-    }
+    e = assertThrows(AssertionError.class, () ->
+        Primitive.BOOLEAN.number(null));
+    assertThat(e.getMessage(), is("BOOLEAN: null"));
   }
 
   /** Test for
@@ -304,5 +296,27 @@ class PrimitiveTest {
     Primitive.BOOLEAN.sortArray(booleans4, 1, 6);
     assertThat(Primitive.BOOLEAN.arrayToString(booleans4),
         is("[true, false, false, false, true, true, false]"));
+  }
+
+  @Test void testCharToDecimalCastWithinBounds() {
+    assertThat(Primitive.charToDecimalCast("1.5", 5, 2),
+        is(new BigDecimal("1.50")));
+    assertThat(Primitive.charToDecimalCast("0", 38, 0),
+        is(new BigDecimal("0")));
+    // scale < 0 branch, well below the bound.
+    assertThat(Primitive.charToDecimalCast("1000", 4, -3),
+        is(new BigDecimal("1000")));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7750">[CALCITE-7750]
+   * Bound plain-notation expansion of DECIMAL literals in
+   * Primitive.checkOverflow</a>. */
+  @Test void testCharToDecimalCastRejectsPathologicalScale() {
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () ->
+            Primitive.charToDecimalCast("1E10000", 1, -10_000));
+    assertThat(e.getMessage(),
+        containsString("plain-notation bound"));
   }
 }
