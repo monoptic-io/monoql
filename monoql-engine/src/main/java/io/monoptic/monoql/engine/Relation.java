@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 /** One table of the {@code METADATA} schema, in terms of {@code Object[]}
@@ -38,13 +38,14 @@ final class Relation<R extends MetaRow> {
   private final RowCodec<R> codec;
   /** For a session relation, the table; otherwise null. */
   private final MetaTable<R> sessionTable;
-  /** For a catalog relation, fetches the table from a catalog. */
-  private final Function<Catalog, MetaTable<R>> accessor;
+  /** For a catalog relation, fetches the table from a catalog, given the
+   * name it is mounted under. */
+  private final BiFunction<String, Catalog, MetaTable<R>> accessor;
   private final Supplier<Map<String, Catalog>> catalogs;
   private final Supplier<String> currentCatalog;
 
   private Relation(String name, Class<R> rowType, MetaTable<R> sessionTable,
-      Function<Catalog, MetaTable<R>> accessor,
+      BiFunction<String, Catalog, MetaTable<R>> accessor,
       Supplier<Map<String, Catalog>> catalogs,
       Supplier<String> currentCatalog) {
     this.name = name;
@@ -61,7 +62,8 @@ final class Relation<R extends MetaRow> {
   }
 
   static <R extends MetaRow> Relation<R> ofCatalogs(String name,
-      Class<R> rowType, Function<Catalog, MetaTable<R>> accessor,
+      Class<R> rowType,
+      BiFunction<String, Catalog, MetaTable<R>> accessor,
       Supplier<Map<String, Catalog>> catalogs,
       Supplier<String> currentCatalog) {
     return new Relation<>(name, rowType, null, accessor, catalogs,
@@ -93,7 +95,7 @@ final class Relation<R extends MetaRow> {
     for (Map.Entry<String, Catalog> e : catalogs.get().entrySet()) {
       final Iterable<R> scan;
       try {
-        scan = accessor.apply(e.getValue()).scan();
+        scan = accessor.apply(e.getKey(), e.getValue()).scan();
       } catch (UnsupportedException ignored) {
         continue;
       }
@@ -117,7 +119,7 @@ final class Relation<R extends MetaRow> {
     if (catalog == null) {
       throw new NotFoundException("Catalog " + catalogName + " not found");
     }
-    accessor.apply(catalog).scan();
+    accessor.apply(catalogName, catalog).scan();
   }
 
   /** Builds a row from named values; columns not named are null. */
@@ -144,7 +146,7 @@ final class Relation<R extends MetaRow> {
     if (catalog == null) {
       throw new NotFoundException("Catalog " + catalogName + " not found");
     }
-    return accessor.apply(catalog);
+    return accessor.apply(catalogName, catalog);
   }
 
   private R decode(Object[] row) {
