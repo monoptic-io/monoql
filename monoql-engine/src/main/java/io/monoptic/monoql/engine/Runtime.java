@@ -37,9 +37,10 @@ final class Runtime {
    *
    * @param cancel Set by another thread to stop the plan. The cursor checks
    *     it before each row, and it is passed to the plan as
-   *     {@link DataContext.Variable#CANCEL_FLAG} for table scans to check */
+   *     {@link DataContext.Variable#CANCEL_FLAG} for table scans to check
+   * @param user Who the session acts as, or null */
   static Enumerator<Object[]> open(RelNode physical, SchemaPlus rootSchema,
-      JavaTypeFactory typeFactory, AtomicBoolean cancel) {
+      JavaTypeFactory typeFactory, AtomicBoolean cancel, String user) {
     if (!(physical instanceof EnumerableRel)) {
       throw new IllegalStateException("Plan is not executable: "
           + physical.getConvention());
@@ -50,7 +51,7 @@ final class Runtime {
             (EnumerableRel) physical, EnumerableRel.Prefer.ARRAY);
     final Enumerator<?> enumerator =
         bindable.bind(
-            new Context(rootSchema, typeFactory, parameters, cancel))
+            new Context(rootSchema, typeFactory, parameters, cancel, user))
             .enumerator();
     // A plan with a single column yields bare values, not arrays.
     final boolean scalar = physical.getRowType().getFieldCount() == 1;
@@ -79,10 +80,10 @@ final class Runtime {
 
   /** Executes a plan and returns all of its rows. */
   static List<Object[]> execute(RelNode physical, SchemaPlus rootSchema,
-      JavaTypeFactory typeFactory, AtomicBoolean cancel) {
+      JavaTypeFactory typeFactory, AtomicBoolean cancel, String user) {
     final List<Object[]> rows = new ArrayList<>();
     try (Enumerator<Object[]> enumerator =
-        open(physical, rootSchema, typeFactory, cancel)) {
+        open(physical, rootSchema, typeFactory, cancel, user)) {
       while (enumerator.moveNext()) {
         rows.add(enumerator.current());
       }
@@ -105,7 +106,7 @@ final class Runtime {
         };
 
     Context(SchemaPlus rootSchema, JavaTypeFactory typeFactory,
-        Map<String, Object> parameters, AtomicBoolean cancel) {
+        Map<String, Object> parameters, AtomicBoolean cancel, String user) {
       this.rootSchema = rootSchema;
       this.typeFactory = typeFactory;
       final long now = System.currentTimeMillis();
@@ -116,9 +117,12 @@ final class Runtime {
       map.put(Variable.TIME_ZONE.camelName, TimeZone.getTimeZone("UTC"));
       map.put(Variable.LOCALE.camelName, Locale.ROOT);
       map.put(Variable.CANCEL_FLAG.camelName, cancel);
-      map.put(Variable.USER.camelName, System.getProperty("user.name"));
-      map.put(Variable.SYSTEM_USER.camelName,
-          System.getProperty("user.name"));
+      // USER and CURRENT_USER are who the session acts as; SYSTEM_USER is
+      // who runs the process, which is also who a session with no user of
+      // its own is taken to be.
+      final String systemUser = System.getProperty("user.name");
+      map.put(Variable.USER.camelName, user != null ? user : systemUser);
+      map.put(Variable.SYSTEM_USER.camelName, systemUser);
       this.variables = map;
     }
 

@@ -224,14 +224,54 @@ grantee: [USER | ROLE | GROUP] name
 
 - A privilege is one or more words (`SELECT`, `CREATE TABLE`, `USE SCHEMA`),
   stored in upper case; or a string or quoted identifier, stored as written
-  (`'roles/bigquery.dataViewer'`). `ALL` is `ALL PRIVILEGES`. monoql does not
-  have a fixed list of privileges; the catalog decides what it recognizes.
+  (`'roles/bigquery.dataViewer'`). `ALL` is `ALL PRIVILEGES`. Any privilege
+  can be recorded; the ones monoql itself acts on are listed under
+  [Enforcement](#enforcement).
 - A grantee's name is an identifier or a string (`'bob@example.com'`). If the
   kind is not given, it is recorded as `PRINCIPAL`.
 - Granting what is already granted is not an error, and can change
   grantability. Revoking what was never granted is not an error.
 - `REVOKE ALL ON x FROM y` removes every privilege `y` holds on `x`.
 - A `GRANT` with no `ON` clause grants roles, with or without the word `ROLE`.
+
+### Enforcement
+
+A session may act as a user (`Monoql.builder().user("ANN")`), and then every
+statement is checked against the grants. A session with no user is not
+checked; that is how grants are set up in the first place. monoql does not
+authenticate anyone: the application that builds the session vouches for the
+name. The user is shown by `SHOW SETTINGS` and `CURRENT_USER`, and cannot be
+changed.
+
+| To | The user needs |
+|---|---|
+| Read a table, view or materialized view | `SELECT` on it |
+| `INSERT`, `UPDATE`, `DELETE` rows of a table | that privilege on it |
+| Run DDL, DCL or a control statement, or the DML it stands for | `ALL PRIVILEGES` on the schema the object is in, or on the catalog |
+| `CREATE SCHEMA`, `DROP SCHEMA`, and anything about roles and users | `ALL PRIVILEGES` on the catalog |
+| `GRANT` or `REVOKE` a privilege on an object | as for DDL; or that privilege on that object `WITH GRANT OPTION` |
+| `CREATE CATALOG`, `DROP CATALOG` | a session with no user |
+| Read the `METADATA` schema (`SHOW`, `DESCRIBE`); `USE`; `SET` | nothing |
+
+- A grant applies to a user if its grantee is that user, or a role the user
+  holds directly or through other roles (`GRANT ROLE`). A grantee recorded
+  without a kind matches either. Names are compared exactly, and an unquoted
+  name in a statement is stored in upper case.
+- A grant on a schema or a catalog covers everything in it. `ALL PRIVILEGES`
+  covers every privilege.
+- A view is read with its definer's rights: `SELECT` on the view is enough,
+  whatever it reads. To define one, you need `SELECT` on what it reads.
+- Because a statement *is* its DML, `DROP TABLE t` and
+  `DELETE FROM METADATA.TABLES WHERE ...` are checked by the same rule, on
+  the rows they change.
+- A catalog is checked only if it has a `GRANTS` table that can be read. One
+  that does not (the `jdbc` catalog, for example) is left to its backend.
+
+Not there yet: privileges finer than `ALL PRIVILEGES` for DDL (`CREATE
+TABLE` on a schema, say); ownership; `EXECUTE` on functions; `GROUP`
+grantees, which match nobody because monoql has no source of group
+membership; and restricting who can read metadata, which includes view
+definitions and the grants themselves.
 
 ## SHOW and DESCRIBE
 

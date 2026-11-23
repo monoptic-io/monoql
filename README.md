@@ -76,8 +76,10 @@ Rows are produced as the result is read, and can be read once.
 `session.cancel()`, from another thread, stops a statement that is running.
 
 `Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
-catalog types (`.provider(...)`), and a hook to customize the Calcite
-`FrameworkConfig` the session plans with (`.configure(...)`).
+catalog types (`.provider(...)`), a user to act as (`.user(name)`), and a hook
+to customize the Calcite `FrameworkConfig` the session plans with
+(`.configure(...)`). With a user, statements are held to the grants in
+`METADATA.GRANTS`; see [Enforcement](docs/sql.md#enforcement).
 
 ## Documentation
 
@@ -120,6 +122,10 @@ than silent no-ops:
 
 - Materialized views are stored and can be paused and refreshed, but no
   catalog stores materialized rows; they read as their definition.
+- Grants are enforced only for a session built with a user, and only in
+  catalogs that have a `GRANTS` table. DDL takes `ALL PRIVILEGES` on the
+  schema or catalog; there are no finer DDL privileges, and no ownership.
+  Anyone can read metadata. The shell cannot act as a user.
 - Identifiers follow the SQL standard: unquoted names fold to upper case.
 - Functions are created from a class name or an opaque body; there is no
   syntax for signatures.

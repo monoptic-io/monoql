@@ -21,6 +21,7 @@ import org.apache.calcite.plan.RelTraitDef;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.prepare.CalciteCatalogReader;
+import org.apache.calcite.prepare.Prepare;
 import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
@@ -47,8 +48,10 @@ import org.apache.calcite.util.Pair;
 import com.google.common.collect.ImmutableList;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 /** Plans one statement: validates it, converts it to relational algebra, and
  * optimizes it into an enumerable plan.
@@ -68,6 +71,7 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
   private final RelOptPlanner planner;
   private final CalciteConnectionConfig connectionConfig;
   private SqlValidator validator;
+  private final Set<List<String>> named = new LinkedHashSet<>();
   private int viewDepth;
 
   /** Creates a planner.
@@ -107,18 +111,31 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
     return typeFactory;
   }
 
-  /** A catalog reader with more than one default path. */
+  /** A catalog reader with more than one default path, which can note the
+   * tables it is asked for. */
   private static final class Reader extends CalciteCatalogReader {
+    private final Set<List<String>> named;
+
     Reader(CalciteSchema rootSchema, List<List<String>> paths,
-        JavaTypeFactory typeFactory, CalciteConnectionConfig config) {
+        JavaTypeFactory typeFactory, CalciteConnectionConfig config,
+        Set<List<String>> named) {
       super(rootSchema,
           SqlNameMatchers.withCaseSensitive(config.caseSensitive()), paths,
           typeFactory, config);
+      this.named = named;
+    }
+
+    @Override public Prepare.PreparingTable getTable(List<String> names) {
+      final Prepare.PreparingTable table = super.getTable(names);
+      if (table != null && named != null) {
+        named.add(table.getQualifiedName());
+      }
+      return table;
     }
   }
 
   private CalciteCatalogReader catalogReader() {
-    return new Reader(rootSchema, paths, typeFactory, connectionConfig);
+    return new Reader(rootSchema, paths, typeFactory, connectionConfig, null);
   }
 
   private SqlValidator validator(CalciteCatalogReader catalogReader) {
@@ -136,6 +153,14 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
   SqlNode validate(SqlNode node) {
     this.validator = validator(catalogReader());
     return validator.validate(node);
+  }
+
+  /** Returns the full names of the tables and views named by the statement
+   * last converted by {@link #rel}. Tables that it reaches only through a
+   * view are not among them: a view is expanded with a reader of its
+   * own. */
+  Set<List<String>> named() {
+    return named;
   }
 
   /** Returns the row type of the statement last validated. */
@@ -161,7 +186,11 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
 
   /** Converts a validated statement to relational algebra. */
   RelRoot rel(SqlNode validated) {
-    final SqlToRelConverter converter = converter(validator, catalogReader());
+    named.clear();
+    final SqlToRelConverter converter =
+        converter(validator,
+            new Reader(rootSchema, paths, typeFactory, connectionConfig,
+                named));
     return finish(converter, converter.convertQuery(validated, false, true));
   }
 

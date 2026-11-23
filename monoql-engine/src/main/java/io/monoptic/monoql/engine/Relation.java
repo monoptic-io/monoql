@@ -8,6 +8,7 @@ import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.MetaRow;
 import io.monoptic.monoql.catalog.MetaTable;
+import io.monoptic.monoql.catalog.MetaTables;
 import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.UnsupportedException;
 
@@ -129,11 +130,9 @@ final class Relation<R extends MetaRow> {
     return row;
   }
 
-  /** Returns the table that a row should be written to. */
-  private MetaTable<R> target(Object[] row) {
-    if (sessionTable != null) {
-      return sessionTable;
-    }
+  /** Returns the catalog a row of a catalog relation belongs to: the one
+   * it names, or the current one. */
+  private String catalogName(Object[] row) {
     String catalogName = codec.catalogOf(row);
     if (catalogName == null) {
       catalogName = currentCatalog.get();
@@ -142,6 +141,46 @@ final class Relation<R extends MetaRow> {
             + " is required, because there is no current catalog");
       }
     }
+    return catalogName;
+  }
+
+  private String value(Object[] row, String column) {
+    final Object o = row[codec.ordinal(column)];
+    return o == null ? null : o.toString();
+  }
+
+  /** Checks that the user of the session may write a row. */
+  void authorize(Authorizer authorizer, Object[] row) {
+    if (!authorizer.enabled()) {
+      return;
+    }
+    if (sessionTable != null) {
+      // Anyone may change their own settings.
+      if (name.equals(CatalogRegistry.NAME)) {
+        authorizer.checkCatalogs();
+      }
+      return;
+    }
+    final String catalogName = catalogName(row);
+    if (name.equals(MetaTables.GRANTS.name())) {
+      authorizer.checkGrant(catalogName, value(row, "PRIVILEGE"),
+          value(row, "OBJECT_TYPE"), value(row, "OBJECT_SCHEMA"),
+          value(row, "OBJECT_NAME"));
+    } else {
+      // Creating or dropping a schema is a change to the catalog.
+      final boolean inSchema = !name.equals(MetaTables.SCHEMAS.name())
+          && codec.columnNames().contains("SCHEMA_NAME");
+      authorizer.checkMetadata(name, catalogName,
+          inSchema ? value(row, "SCHEMA_NAME") : null);
+    }
+  }
+
+  /** Returns the table that a row should be written to. */
+  private MetaTable<R> target(Object[] row) {
+    if (sessionTable != null) {
+      return sessionTable;
+    }
+    final String catalogName = catalogName(row);
     final Catalog catalog = catalogs.get().get(catalogName);
     if (catalog == null) {
       throw new NotFoundException("Catalog " + catalogName + " not found");

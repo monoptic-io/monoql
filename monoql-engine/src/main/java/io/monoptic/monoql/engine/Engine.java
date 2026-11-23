@@ -53,7 +53,9 @@ import java.util.function.Consumer;
  * metadata table ends in calls on the catalog SPI. */
 public final class Engine implements Lowering.Context {
   private final FrameworkConfig config;
+  private final String user;
   private final CatalogRegistry registry;
+  private final Authorizer authorizer;
   private final Settings settings;
   private final CalciteSchema rootSchema;
   private final MetadataSchema metadata;
@@ -62,10 +64,18 @@ public final class Engine implements Lowering.Context {
   /** Stops the statement that is running; replaced for each statement. */
   private volatile AtomicBoolean cancel = new AtomicBoolean();
 
-  public Engine(FrameworkConfig config, List<CatalogProvider> providers) {
+  /** Creates an engine.
+   *
+   * @param user Who the session acts as, or null. With a user, statements
+   *     are checked against the grants of each catalog; see
+   *     {@link Authorizer} */
+  public Engine(FrameworkConfig config, List<CatalogProvider> providers,
+      String user) {
     this.config = config;
+    this.user = user;
     this.registry = new CatalogRegistry(providers, this::catalogsChanged);
-    this.settings = new Settings(registry);
+    this.authorizer = new Authorizer(user, registry);
+    this.settings = new Settings(registry, user);
     this.metadata = new MetadataSchema(registry, settings, this::viewType);
     // Not cached: the catalogs are the source of truth.
     this.rootSchema =
@@ -126,6 +136,12 @@ public final class Engine implements Lowering.Context {
   @Override public Lowering.Qualified qualify(SqlNode query) {
     final QueryPlanner planner = planner();
     final SqlNode validated = validate(planner, query);
+    if (authorizer.enabled()) {
+      // A view lets others read what its definer could; so the definer
+      // must be able to. Converting the query finds what it reads.
+      planner.rel(validated);
+      authorize(planner, null);
+    }
     return new Lowering.Qualified(
         validated.toSqlString(CalciteSqlDialect.DEFAULT).getSql(),
         planner.rowType(validated));
@@ -258,6 +274,7 @@ public final class Engine implements Lowering.Context {
         && insert.isUpsert();
     final SqlNode validated = validate(planner, node);
     final RelRoot root = planner.rel(validated);
+    authorize(planner, root);
     if (root.rel instanceof TableModify modify) {
       final MetadataTable table = modify.getTable().unwrap(MetadataTable.class);
       final long count;
@@ -279,7 +296,7 @@ public final class Engine implements Lowering.Context {
       // The user's own query: hand back a cursor, and read as it is read.
       final Enumerator<Object[]> cursor =
           Runtime.open(planner.optimize(root), rootSchema.plus(),
-              planner.typeFactory(), cancel);
+              planner.typeFactory(), cancel, user);
       return Result.ofRows(root.validatedRowType, iterator(cursor),
           cursor::close);
     }
@@ -290,6 +307,29 @@ public final class Engine implements Lowering.Context {
       nothingAffected(step);
     }
     return Result.ofRows(root.validatedRowType, rows.iterator(), null);
+  }
+
+  /** Checks that the user may read and write the tables named by the
+   * statement that {@code planner} just converted. Metadata tables are not checked here: reading
+   * them is open, and writes to them are checked row by row.
+   *
+   * @param root The statement's plan; null if it will not be run */
+  private void authorize(QueryPlanner planner, RelRoot root) {
+    if (!authorizer.enabled()) {
+      return;
+    }
+    List<String> target = null;
+    String operation = null;
+    if (root != null && root.rel instanceof TableModify modify) {
+      target = modify.getTable().getQualifiedName();
+      operation = modify.getOperation().name();
+    }
+    for (List<String> name : planner.named()) {
+      if (name.size() == 3) {
+        authorizer.checkRelation(name.get(0), name.get(1), name.get(2),
+            name.equals(target) ? operation : "SELECT");
+      }
+    }
   }
 
   /** Reads a cursor a row at a time, and no sooner than asked: asking for
@@ -336,7 +376,9 @@ public final class Engine implements Lowering.Context {
         // The catalog cannot list these rows, which is why none was found.
         // It may still be able to delete them; ask it to.
         for (Map<String, Object> values : step.doomed()) {
-          relation.delete(relation.row(values));
+          final Object[] row = relation.row(values);
+          relation.authorize(authorizer, row);
+          relation.delete(row);
         }
         return step.doomed().size();
       }
@@ -349,7 +391,7 @@ public final class Engine implements Lowering.Context {
 
   private List<Object[]> rows(QueryPlanner planner, RelRoot root) {
     return Runtime.execute(planner.optimize(root), rootSchema.plus(),
-        planner.typeFactory(), cancel);
+        planner.typeFactory(), cancel, user);
   }
 
   /** The rows a modification applies to. For {@code INSERT}, the new rows;
@@ -411,6 +453,7 @@ public final class Engine implements Lowering.Context {
     case INSERT:
       for (Object[] row : rows) {
         try {
+          relation.authorize(authorizer, row);
           if (upsert) {
             relation.upsert(row);
           } else {
@@ -429,12 +472,15 @@ public final class Engine implements Lowering.Context {
       final List<Object[]> after = new ArrayList<>();
       images(modify, rows, before, after);
       for (int i = 0; i < before.size(); i++) {
+        relation.authorize(authorizer, before.get(i));
+        relation.authorize(authorizer, after.get(i));
         relation.update(before.get(i), after.get(i));
         ++count;
       }
       return count;
     case DELETE:
       for (Object[] row : rows) {
+        relation.authorize(authorizer, row);
         relation.delete(row);
         ++count;
       }
@@ -463,6 +509,7 @@ public final class Engine implements Lowering.Context {
   private String plan(SqlNode node) {
     final QueryPlanner planner = planner();
     final RelRoot root = planner.rel(validate(planner, node));
+    authorize(planner, root);
     if (root.rel instanceof TableModify modify
         && modify.getTable().unwrap(MetadataTable.class) != null) {
       // The modification itself is applied by the engine; only its input

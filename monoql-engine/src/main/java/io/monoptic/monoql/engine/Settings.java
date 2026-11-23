@@ -21,9 +21,11 @@ final class Settings implements MetaTable<Setting> {
   private final CatalogRegistry registry;
   private String catalog;
   private String schema;
+  private final String user;
 
-  Settings(CatalogRegistry registry) {
+  Settings(CatalogRegistry registry, String user) {
     this.registry = registry;
+    this.user = user;
   }
 
   synchronized String catalog() {
@@ -48,7 +50,8 @@ final class Settings implements MetaTable<Setting> {
 
   @Override public synchronized Iterable<Setting> scan() {
     return List.of(new Setting(Setting.CATALOG, catalog),
-        new Setting(Setting.SCHEMA, schema));
+        new Setting(Setting.SCHEMA, schema),
+        new Setting(Setting.USER, user));
   }
 
   @Override public synchronized void update(Setting before, Setting after) {
@@ -86,6 +89,9 @@ final class Settings implements MetaTable<Setting> {
       }
       schema = value;
       break;
+    case Setting.USER:
+      throw new CatalogException(
+          "The user of a session cannot be changed");
     default:
       throw NotFoundException.of(NAME, before.key());
     }

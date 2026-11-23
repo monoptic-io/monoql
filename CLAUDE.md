@@ -55,6 +55,9 @@ JDK 21, which must be installed.
   keywords and hooks in `config.fmpp`. Parse tree: `io.monoptic.monoql.sql`.
 - Lowering: `io.monoptic.monoql.engine.Lowering`.
 - Execution: `Engine` (dispatch, metadata DML), `QueryPlanner`, `Runtime`.
+- Authorization: `Authorizer` holds the rules; `Engine.authorize` checks
+  the tables a statement names, and `Relation.authorize` each metadata row
+  it writes. A new way to read or write data must go through one of them.
 - SQL view of a record: `RowCodec`.
 - SPI: `io.monoptic.monoql.catalog`. Reference implementation:
   `catalog.memory.MemoryCatalog`.
