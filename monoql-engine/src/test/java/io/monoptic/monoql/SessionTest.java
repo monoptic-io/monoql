@@ -7,6 +7,7 @@ package io.monoptic.monoql;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.NotFoundException;
+import io.monoptic.monoql.catalog.UnsupportedException;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,6 +141,46 @@ class SessionTest {
         () -> session.execute("create view bad as select * from nosuch"));
     assertThrows(CatalogException.class,
         () -> session.execute("create view bad (a) as select 1, 2"));
+  }
+
+  /** A view's columns are derived from its definition. */
+  @Test void columnsOfViews() {
+    run(session, "create table t (id int not null, name varchar(10))",
+        "create view v as select id, name from t",
+        "create view w (k, doubled) as select id, id * 2 from v",
+        "create materialized view mv as select count(*) as c from t");
+    assertEquals(List.of("[ID, INTEGER, false, null]",
+            "[NAME, VARCHAR(10), true, null]"),
+        rows(session, "describe v"));
+    assertEquals(List.of("[K, INTEGER, false, null]",
+            "[DOUBLED, INTEGER, false, null]"),
+        rows(session, "describe w"));
+    assertEquals(List.of("[C, BIGINT, false, null]"),
+        rows(session, "describe mv"));
+    assertEquals(List.of("[DOUBLED, INTEGER, false, null]"),
+        rows(session, "show columns in w like 'D%'"));
+    assertEquals(List.of("[MV, 1]", "[T, 2]", "[V, 2]", "[W, 2]"),
+        rows(session, "select table_name, count(*) from metadata.columns"
+            + " group by table_name order by 1"));
+
+    // They follow the definition, and cannot be changed on their own.
+    assertThrows(UnsupportedException.class,
+        () -> session.execute("insert into metadata.columns (schema_name,"
+            + " table_name, column_name, data_type)"
+            + " values ('MAIN', 'V', 'X', 'INTEGER')"));
+    run(session, "alter table t add column extra boolean",
+        "create or replace view v as select * from t");
+    assertEquals(3, rows(session, "describe v").size());
+
+    // A view that is no longer valid has no columns; its neighbors do.
+    run(session, "drop view v");
+    final NotFoundException e =
+        assertThrows(NotFoundException.class,
+            () -> session.execute("describe w"));
+    assertTrue(e.getMessage().contains("no longer valid"), e.getMessage());
+    assertEquals(List.of("[MV, 1]", "[T, 3]"),
+        rows(session, "select table_name, count(*) from metadata.columns"
+            + " group by table_name order by 1"));
   }
 
   @Test void materializedViews() {

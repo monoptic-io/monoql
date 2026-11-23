@@ -1015,7 +1015,9 @@ final class Lowering {
     return targeted(table.catalog, "COLUMNS",
         select(cols("COLUMN_NAME", "DATA_TYPE", "NULLABLE", "COMMENT"),
             "COLUMNS", where.toString(), SqlText.id("ORDINAL_POSITION")),
-        notFound(ObjectKind.TABLE, table));
+        // A view has columns only while its definition is valid.
+        "Table or view " + table + " not found, or it is a view whose"
+            + " definition is no longer valid");
   }
 
   private Lowered describeSchema(SqlDescribeSchema n) {

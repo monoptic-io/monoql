@@ -66,7 +66,7 @@ public final class Engine implements Lowering.Context {
     this.config = config;
     this.registry = new CatalogRegistry(providers, this::catalogsChanged);
     this.settings = new Settings(registry);
-    this.metadata = new MetadataSchema(registry, settings);
+    this.metadata = new MetadataSchema(registry, settings, this::viewType);
     // Not cached: the catalogs are the source of truth.
     this.rootSchema =
         CalciteSchema.createRootSchema(false, false, "",

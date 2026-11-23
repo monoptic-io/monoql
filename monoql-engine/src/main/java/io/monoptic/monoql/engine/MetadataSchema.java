@@ -9,11 +9,14 @@ import io.monoptic.monoql.catalog.CatalogInfo;
 import io.monoptic.monoql.catalog.MetaRow;
 import io.monoptic.monoql.catalog.MetaTables;
 
+import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.schema.Table;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 /** The {@code METADATA} schema: every metadata table of every mounted
@@ -26,7 +29,12 @@ final class MetadataSchema extends LazySchema {
 
   private final Map<String, MetadataTable> tables = new LinkedHashMap<>();
 
-  MetadataSchema(CatalogRegistry registry, Settings settings) {
+  /** Creates the schema.
+   *
+   * @param typeDeriver Validates a query against a schema path and returns
+   *     its row type; used to find the columns of views */
+  MetadataSchema(CatalogRegistry registry, Settings settings,
+      BiFunction<String, List<String>, RelDataType> typeDeriver) {
     final Supplier<Map<String, Catalog>> catalogs = registry::catalogs;
     final Supplier<String> current = settings::catalog;
     add(Relation.ofSession(CatalogRegistry.NAME, CatalogInfo.class,
@@ -36,7 +44,8 @@ final class MetadataSchema extends LazySchema {
       add(relation(def, catalogs, current));
       if (def == MetaTables.TABLES) {
         add(Relation.ofCatalogs(ColumnsTable.NAME, ColumnInfo.class,
-            c -> new ColumnsTable(c.tables()), catalogs, current));
+            (name, c) -> new ColumnsTable(name, c, typeDeriver), catalogs,
+            current));
       }
     }
   }
@@ -44,8 +53,8 @@ final class MetadataSchema extends LazySchema {
   private static <R extends MetaRow> Relation<R> relation(
       MetaTables.Def<R> def, Supplier<Map<String, Catalog>> catalogs,
       Supplier<String> current) {
-    return Relation.ofCatalogs(def.name(), def.rowType(), def.accessor(),
-        catalogs, current);
+    return Relation.ofCatalogs(def.name(), def.rowType(),
+        (name, c) -> def.accessor().apply(c), catalogs, current);
   }
 
   private void add(Relation<?> relation) {

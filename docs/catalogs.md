@@ -151,7 +151,7 @@ Three more tables belong to the session rather than to a catalog:
 |---|---|---|
 | `CATALOGS` | `CATALOG_NAME, TYPE, COMMENT, OPTIONS` | The mounted catalogs. Inserting a row creates and mounts one. |
 | `SETTINGS` | `SETTING_NAME, SETTING_VALUE` | `catalog` and `schema`: the defaults for names. Update only. |
-| `COLUMNS` | `CATALOG_NAME, SCHEMA_NAME, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, NULLABLE, COMMENT` | Derived from `TABLES`. |
+| `COLUMNS` | `CATALOG_NAME, SCHEMA_NAME, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, NULLABLE, COMMENT` | Derived from `TABLES`, and from the definitions of `VIEWS` and `MATERIALIZED_VIEWS`. Only the columns of tables can be written. |
 
 In SQL, lists are arrays, options are `MAP<VARCHAR, VARCHAR>`, timestamps
 are `TIMESTAMP(3)` in UTC, and `TABLES.COLUMNS` is an array of column

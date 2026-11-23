@@ -4,30 +4,49 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.MonoqlException;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
+import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Column;
+import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.catalog.Key;
+import io.monoptic.monoql.catalog.MaterializedViewInfo;
 import io.monoptic.monoql.catalog.MetaTable;
 import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.TableInfo;
+import io.monoptic.monoql.catalog.UnsupportedException;
+import io.monoptic.monoql.catalog.ViewInfo;
+
+import org.apache.calcite.rel.type.RelDataType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.BiFunction;
 
-/** {@code COLUMNS}, as a view over a catalog's {@code TABLES}.
+/** {@code COLUMNS}, as a view over a catalog's {@code TABLES} and its
+ * views.
  *
- * <p>Reads flatten the columns of each table. Writes are rewritten as an
+ * <p>Reads flatten the columns of each table, and derive those of each
+ * view and materialized view from its definition. Writes are rewritten as an
  * update of the owning table's row: inserting a column is
  * {@code ALTER TABLE ... ADD COLUMN}, deleting one is
  * {@code ... DROP COLUMN}. */
 final class ColumnsTable implements MetaTable<ColumnInfo> {
   static final String NAME = "COLUMNS";
 
+  private final String catalogName;
+  private final Catalog catalog;
   private final MetaTable<TableInfo> tables;
+  private final BiFunction<String, List<String>, RelDataType> typeDeriver;
 
-  ColumnsTable(MetaTable<TableInfo> tables) {
-    this.tables = tables;
+  ColumnsTable(String catalogName, Catalog catalog,
+      BiFunction<String, List<String>, RelDataType> typeDeriver) {
+    this.catalogName = catalogName;
+    this.catalog = catalog;
+    this.tables = catalog.tables();
+    this.typeDeriver = typeDeriver;
   }
 
   @Override public String name() {
@@ -36,22 +55,89 @@ final class ColumnsTable implements MetaTable<ColumnInfo> {
 
   @Override public Iterable<ColumnInfo> scan() {
     final List<ColumnInfo> rows = new ArrayList<>();
-    for (TableInfo table : tables.scan()) {
-      int ordinal = 1;
-      for (Column c : table.columns()) {
-        rows.add(
-            new ColumnInfo(table.schemaName(), table.tableName(),
-                c.columnName(), ordinal++, c.dataType(), c.nullable(),
-                c.comment()));
+    UnsupportedException unsupported = null;
+    try {
+      for (TableInfo table : tables.scan()) {
+        add(rows, table.schemaName(), table.tableName(), table.columns());
       }
+    } catch (UnsupportedException e) {
+      unsupported = e;
+    }
+    try {
+      for (ViewInfo view : catalog.views().scan()) {
+        addView(rows, view.schemaName(), view.viewName(), view.columnNames(),
+            view.definition());
+      }
+      unsupported = null;
+    } catch (UnsupportedException ignored) {
+      // A catalog need not have views.
+    }
+    try {
+      for (MaterializedViewInfo view : catalog.materializedViews().scan()) {
+        addView(rows, view.schemaName(), view.viewName(), view.columnNames(),
+            view.definition());
+      }
+      unsupported = null;
+    } catch (UnsupportedException ignored) {
+      // Nor materialized views.
+    }
+    if (unsupported != null) {
+      throw unsupported;
     }
     return rows;
   }
 
+  private static void add(List<ColumnInfo> rows, String schemaName,
+      String tableName, List<Column> columns) {
+    int ordinal = 1;
+    for (Column c : columns) {
+      rows.add(
+          new ColumnInfo(schemaName, tableName, c.columnName(), ordinal++,
+              c.dataType(), c.nullable(), c.comment()));
+    }
+  }
+
+  /** Adds the columns of a view, which are whatever its definition yields
+   * today. A view whose definition is no longer valid (say, because a table
+   * it reads was dropped) has none. */
+  private void addView(List<ColumnInfo> rows, String schemaName,
+      String viewName, List<String> columnNames, String definition) {
+    final RelDataType rowType;
+    try {
+      rowType =
+          new ViewTable(definition, columnNames,
+              List.of(catalogName, schemaName),
+              List.of(catalogName, schemaName, viewName), typeDeriver)
+              .rowType();
+    } catch (MonoqlException | CatalogException e) {
+      return;
+    }
+    add(rows, schemaName, viewName, DataTypes.columns(rowType));
+  }
+
+  private boolean isView(Key key) {
+    try {
+      if (catalog.views().get(key).isPresent()) {
+        return true;
+      }
+    } catch (UnsupportedException ignored) {
+      // Fall through.
+    }
+    try {
+      return catalog.materializedViews().get(key).isPresent();
+    } catch (UnsupportedException ignored) {
+      return false;
+    }
+  }
+
   private TableInfo table(ColumnInfo row) {
     final Key key = Key.of(row.schemaName(), row.tableName());
-    return tables.get(key)
-        .orElseThrow(() -> NotFoundException.of(tables.name(), key));
+    final Optional<TableInfo> table = tables.get(key);
+    if (table.isEmpty() && isView(key)) {
+      throw new UnsupportedException("The columns of view " + key
+          + " follow from its definition, and cannot be changed");
+    }
+    return table.orElseThrow(() -> NotFoundException.of(tables.name(), key));
   }
 
   private static int indexOf(TableInfo table, String columnName) {

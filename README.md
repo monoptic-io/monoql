@@ -120,7 +120,6 @@ than silent no-ops:
 
 - Materialized views are stored and can be paused and refreshed, but no
   catalog stores materialized rows; they read as their definition.
-- `DESCRIBE` and `METADATA.COLUMNS` cover tables, not views.
 - Identifiers follow the SQL standard: unquoted names fold to upper case.
 - Functions are created from a class name or an opaque body; there is no
   syntax for signatures.
