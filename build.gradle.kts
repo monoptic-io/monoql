@@ -157,9 +157,10 @@ tasks.validateBeforeBuildingReleaseArtifacts {
 
 val String.v: String get() = rootProject.extra["$this.version"] as String
 
-val buildVersion = "calcite".v + releaseParams.snapshotSuffix
+// monoql: the fork has its own version; calcite.version records the upstream base.
+val buildVersion = "monoql".v + releaseParams.snapshotSuffix
 
-println("Building Apache Calcite $buildVersion")
+println("Building monoql $buildVersion (on Apache Calcite ${"calcite".v})")
 
 val testHepLargePlanMode by tasks.registering() {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
@@ -235,27 +236,12 @@ val javadocAggregateIncludingTests by tasks.registering(Javadoc::class) {
     setDestinationDir(file(layout.buildDirectory.get().file("docs/javadocAggregateIncludingTests")))
 }
 
-val adaptersForSqlline = listOf(
-    ":arrow", ":babel", ":cassandra", ":druid", ":elasticsearch",
-    ":file", ":geode", ":innodb", ":kafka", ":mongodb",
-    ":pig", ":piglet", ":plus", ":redis", ":server", ":spark", ":splunk")
-
 val dataSetsForSqlline = listOf(
     "net.hydromatic:foodmart-data-hsqldb",
     "net.hydromatic:scott-data-hsqldb",
     "net.hydromatic:steelwheels-data-hsqldb",
     "net.hydromatic:chinook-data-hsqldb"
 )
-
-val sqllineClasspath by configurations.creating {
-    isCanBeConsumed = false
-    attributes {
-        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
-        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.CLASSES_AND_RESOURCES))
-        attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, JavaVersion.current().majorVersion.toInt())
-        attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.EXTERNAL))
-    }
-}
 
 @CacheableRule
 abstract class AddDependenciesRule @Inject constructor(val dependencies: List<String>) : ComponentMetadataRule {
@@ -273,22 +259,12 @@ abstract class AddDependenciesRule @Inject constructor(val dependencies: List<St
 }
 
 dependencies {
-    sqllineClasspath(platform(project(":bom")))
-    sqllineClasspath(project(":testkit"))
-    sqllineClasspath("sqlline:sqlline")
-    for (p in adaptersForSqlline) {
-        sqllineClasspath(project(p))
-    }
-
     components {
         for (m in dataSetsForSqlline) {
             withModule<AddDependenciesRule>(m)
         }
     }
 
-    for (m in dataSetsForSqlline) {
-        sqllineClasspath(m)
-    }
     if (enableJacoco) {
         for (p in subprojects) {
             val hasTests = p.file("src/test/java").isDirectory || p.file("src/test/kotlin").isDirectory
@@ -296,24 +272,6 @@ dependencies {
                 jacocoAggregation(p)
             }
         }
-    }
-}
-
-val buildSqllineClasspath by tasks.registering(Jar::class) {
-    description = "Creates classpath-only jar for running SqlLine"
-    // One can debug classpath with ./gradlew dependencies --configuration sqllineClasspath
-    inputs.files(sqllineClasspath).withNormalizer(ClasspathNormalizer::class.java)
-    archiveFileName.set("sqllineClasspath.jar")
-    manifest {
-        attributes(
-            "Main-Class" to "sqlline.SqlLine",
-            "Class-Path" to provider {
-                // Class-Path is a list of URLs
-                sqllineClasspath.joinToString(" ") {
-                    it.toURI().toURL().toString()
-                }
-            }
-        )
     }
 }
 
@@ -384,7 +342,8 @@ sonarqube {
 }
 
 allprojects {
-    group = "org.apache.calcite"
+    // monoql: never publish forked artifacts under upstream's coordinates.
+    group = "io.monoptic.monoql"
     version = buildVersion
 
     apply(plugin = "com.github.vlsi.gradle-extensions")
@@ -507,6 +466,8 @@ allprojects {
             // then it recognizes it should suppress all the output.
             excludeJavaCcGenerated()
             excludeIntellijGenerated()
+            // monoql: Monoptic's files do not follow upstream's style profile
+            exclude("**/io/monoptic/**")
             // Workaround for https://github.com/gradle/gradle/issues/13927
             // Absolute paths must not be used as they defeat Gradle build cache
             // Unfortunately, Gradle passes only config_loc variable by default, so we make
@@ -620,6 +581,8 @@ allprojects {
             configure<com.github.autostyle.gradle.AutostyleExtension> {
                 java {
                     filter.exclude(*javaccGeneratedPatterns +
+                            // monoql: Monoptic's files have their own header
+                            "**/io/monoptic/**" +
                             "**/test/java/*.java" +
                             "**/RelRule.java" /** remove as part of CALCITE-4831 **/)
                     license()
@@ -1010,7 +973,8 @@ allprojects {
         }
 
         base {
-            archivesName.set("calcite-$name")
+            // monoql: new modules are already named monoql-*; forked ones keep calcite-*.
+            archivesName.set(if (name.startsWith("monoql")) name else "calcite-$name")
         }
 
         configure<PublishingExtension> {

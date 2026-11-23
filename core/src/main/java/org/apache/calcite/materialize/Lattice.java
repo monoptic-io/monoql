@@ -35,7 +35,6 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.runtime.Utilities;
 import org.apache.calcite.schema.Schemas;
 import org.apache.calcite.schema.Table;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.schema.impl.StarTable;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlDialect;
@@ -64,6 +63,8 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Ordering;
+
+import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.initialization.qual.UnknownInitialization;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
@@ -825,7 +826,7 @@ public class Lattice {
       this.rootSchema = requireNonNull(schema.root());
       checkArgument(rootSchema.isRoot(), "must be root schema");
       CalcitePrepare.ConvertResult parsed =
-          Schemas.convert(MaterializedViewTable.MATERIALIZATION_CONNECTION,
+          Schemas.convert(LegacyJdbc.materializationConnection(),
               schema, schema.path(null), sql);
 
       // Walk the join tree.

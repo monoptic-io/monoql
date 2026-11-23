@@ -54,3 +54,17 @@ site/favicon.ico
 # Kotlin compiler session and log files
 **/.kotlin/sessions/kotlin-compiler*.salive
 **/.kotlin/errors/errors*.log
+
+# monoql: files written by Monoptic carry a Monoptic copyright notice and an
+# SPDX identifier (Apache-2.0), not the ASF header that RAT looks for.
+monoql
+monoql-*/**
+**/io/monoptic/**
+**/META-INF/services/io.monoptic.*
+legacy-jdbc/build.gradle.kts
+legacy-jdbc/src/main/java/org/apache/calcite/jdbc/LegacyJdbcProvider.java
+gradle/gradle-daemon-jvm.properties
+UPSTREAM.md
+CLAUDE.md
+docs/**
+README.md

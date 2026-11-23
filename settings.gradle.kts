@@ -60,7 +60,7 @@ plugins {
 
 // This is the name of a current project
 // Note: it cannot be inferred from the directory name as developer might clone Calcite to calcite_tmp folder
-rootProject.name = "calcite"
+rootProject.name = "monoql"
 
 include(
     "bom",
@@ -77,7 +77,12 @@ include(
     "geode",
     "innodb",
     "kafka",
+    "legacy-jdbc",
     "linq4j",
+    "monoql-catalog",
+    "monoql-engine",
+    "monoql-jdbc",
+    "monoql-repl",
     "mongodb",
     "pig",
     "piglet",

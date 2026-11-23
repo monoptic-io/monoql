@@ -168,6 +168,7 @@ dependencies {
         runtimev("org.slf4j:slf4j-log4j12", "slf4j")
         apiv("org.testcontainers:testcontainers")
         apiv("redis.clients:jedis")
+        apiv("org.jline:jline")
         apiv("sqlline:sqlline")
         runtimev("org.openjdk.jmh:jmh-core", "jmh")
         apiv("org.openjdk.jmh:jmh-generator-annprocess", "jmh")

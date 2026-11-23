@@ -1,40 +1,129 @@
-<!--
-{% comment %}
-Licensed to the Apache Software Foundation (ASF) under one or more
-contributor license agreements.  See the NOTICE file distributed with
-this work for additional information regarding copyright ownership.
-The ASF licenses this file to you under the Apache License, Version 2.0
-(the "License"); you may not use this file except in compliance with
-the License.  You may obtain a copy of the License at
+# monoql
 
-http://www.apache.org/licenses/LICENSE-2.0
+monoql is a SQL engine built on a fork of [Apache Calcite](https://calcite.apache.org),
+maintained by [Monoptic](https://monoptic.io).
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-{% endcomment %}
--->
+It adds three things to Calcite, and takes one away:
 
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/org.apache.calcite/calcite-core/badge.svg)](https://maven-badges.herokuapp.com/maven-central/org.apache.calcite/calcite-core)
-[![CI Status](https://github.com/apache/calcite/workflows/CI/badge.svg?branch=main)](https://github.com/apache/calcite/actions?query=branch%3Amain)
+- **A broad DDL, DCL and control grammar.** `CREATE`/`DROP`/`ALTER` for
+  catalogs, schemas, tables, views, materialized views, functions, triggers,
+  roles and users; `GRANT` and `REVOKE`; `PAUSE`, `RESUME`, `FIRE` and
+  `REFRESH`; `SHOW`, `USE`, `COMMENT ON`. The syntax follows what Databricks,
+  Snowflake, BigQuery and Flink have in common, so that it fits most backends
+  without modification.
+- **A catalog SPI made of tables.** A catalog is a set of small metadata
+  tables (schemas, tables, grants, triggers, ...), each of which can be
+  scanned, inserted into, updated and deleted from. Every one is optional, and
+  unsupported by default, so an adapter is exactly as large as what its
+  backend can do.
+- **One metadata model.** Statements are not dispatched to service methods.
+  `GRANT` *is* an insert into `METADATA.GRANTS`; `DROP TABLE` *is* a delete
+  from `METADATA.TABLES`; `PAUSE TRIGGER` *is* an update of
+  `METADATA.TRIGGERS`. The statement is rewritten to the DML, and the DML is
+  what runs. Either spelling works, and everything is queryable.
+- **No JDBC driver.** Calcite's `jdbc:calcite:` driver is gone from the
+  engine. A `Session` parses, plans and executes in-process through Calcite's
+  `Frameworks` machinery. JDBC remains only as a way to reach *other*
+  databases.
 
-# Apache Calcite
+## Try it
 
-Apache Calcite is a dynamic data management framework.
+You need a JDK 21 installed. Gradle finds it and runs its daemon on it,
+whatever `java` is on your path; the shell itself runs on 21 or later.
 
-It contains many of the pieces that comprise a typical
-database management system but omits the storage primitives.
-It provides an industry standard SQL parser and validator,
-a customisable optimizer with pluggable rules and cost functions,
-logical and physical algebraic operators, various transformation
-algorithms from SQL to algebra (and the opposite), and many
-adapters for executing SQL queries over Cassandra, Druid,
-Elasticsearch, MongoDB, Kafka, and others, with minimal
-configuration.
+```
+$ ./monoql
+monoql 0.1.0-SNAPSHOT  Type !help for commands; end SQL with a semicolon.
+MEMORY.MAIN> create table orders (id int not null primary key, customer varchar(20), amount decimal(10, 2));
+OK, 1 row affected in 0.412s
+MEMORY.MAIN> insert into orders values (1, 'ann', 10.50), (2, 'bob', 20.00);
+OK, 2 rows affected in 0.218s
+MEMORY.MAIN> grant select on orders to role analyst;
+OK, 1 row affected in 0.031s
+MEMORY.MAIN> select privilege, grantee from metadata.grants;
+┌───────────┬─────────┐
+│ PRIVILEGE │ GRANTEE │
+├───────────┼─────────┤
+│ SELECT    │ ANALYST │
+└───────────┴─────────┘
+1 row in 0.044s
+MEMORY.MAIN> !lower revoke select on orders from role analyst
+DELETE FROM "METADATA"."GRANTS"
+WHERE "CATALOG_NAME" = 'MEMORY'
+  AND "OBJECT_TYPE" = 'TABLE'
+  AND "OBJECT_SCHEMA" = 'MAIN'
+  AND "OBJECT_NAME" = 'ORDERS'
+  AND "PRIVILEGE" = 'SELECT'
+  AND "GRANTEE_TYPE" IN ('ROLE', 'PRINCIPAL') AND "GRANTEE" = 'ANALYST';
+```
 
-For more details, see the [home page](http://calcite.apache.org).
+`!lower` prints what a statement is shorthand for. Paste that `DELETE` in and
+it does what the `REVOKE` would have done.
 
-The project uses [JIRA](https://issues.apache.org/jira/browse/CALCITE)
-for issue tracking. For further information, please see the [JIRA accounts guide](https://calcite.apache.org/develop/#jira-accounts).
+From Java:
+
+```java
+try (Session session = Monoql.builder().build()) {
+  session.execute("create table t (id int, name varchar)");
+  session.execute("insert into t values (1, 'a')");
+  Result result = session.execute("select * from t");
+  for (Object[] row : result.rows()) { ... }
+}
+```
+
+`Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
+catalog types (`.provider(...)`), and a hook to customize the Calcite
+`FrameworkConfig` the session plans with (`.configure(...)`).
+
+## Documentation
+
+- [SQL reference](docs/sql.md): every statement monoql adds, and the DML each
+  one stands for.
+- [Catalogs](docs/catalogs.md): the metadata tables, and how to write a
+  catalog.
+- [The shell](docs/shell.md).
+- [UPSTREAM.md](UPSTREAM.md): how this fork relates to Apache Calcite, what
+  was changed, and how to take upstream changes.
+
+## Layout
+
+New code is under `io.monoptic`; forked code keeps its `org.apache.calcite`
+packages and, as far as possible, its text.
+
+| Module | What it is |
+|---|---|
+| `monoql-catalog` | The catalog API and SPI (`io.monoptic.monoql.catalog`), and an in-memory catalog that implements all of it. |
+| `monoql-engine` | The parser extensions, the `METADATA` schema, the lowering of statements to DML, and `Session`. |
+| `monoql-jdbc` | A catalog over any JDBC database. An ordinary SPI implementation, in its own jar. |
+| `monoql-repl` | The shell. |
+| `core`, `linq4j` | Calcite's planner and runtime, with the JDBC driver removed. |
+| `legacy-jdbc` | The removed driver. Used only by upstream's tests, by way of `testkit`. |
+| everything else | Calcite's other modules (adapters, `babel`, `server`, `plus`, ...), carried unchanged. |
+
+## Building
+
+```
+./gradlew :monoql-catalog:test :monoql-engine:test :monoql-jdbc:test :monoql-repl:test
+./gradlew :core:test        # upstream's suite, about a minute
+./gradlew build             # everything
+```
+
+## Status
+
+This is an early cut. Known gaps, all of them deliberate omissions rather
+than silent no-ops:
+
+- Results are materialized in memory; there is no streaming cursor yet.
+- Materialized views are stored and can be paused and refreshed, but no
+  catalog stores materialized rows; they read as their definition.
+- `DESCRIBE` and `METADATA.COLUMNS` cover tables, not views.
+- Identifiers follow the SQL standard: unquoted names fold to upper case.
+- Functions are created from a class name or an opaque body; there is no
+  syntax for signatures.
+
+## License
+
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+monoql is a derivative work of Apache Calcite; it is not an Apache Software
+Foundation project and is not endorsed by the ASF. "Apache Calcite" and
+"Calcite" are trademarks of the ASF.

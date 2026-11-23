@@ -1,0 +1,123 @@
+# Copyright (c) Monoptic LLC.
+# SPDX-License-Identifier: Apache-2.0
+
+# Configuration of the monoql parser. It is the core Calcite parser template
+# (core/src/main/codegen/templates/Parser.jj) plus the statements in
+# includes/parserImpls.ftl.
+
+data: {
+
+  parser: {
+    package: "io.monoptic.monoql.sql.parser",
+    class: "MonoqlParserImpl",
+
+    imports: [
+      "io.monoptic.monoql.sql.ObjectKind"
+      "io.monoptic.monoql.sql.SqlAlterTable"
+      "io.monoptic.monoql.sql.SqlClauses"
+      "io.monoptic.monoql.sql.SqlColumnDecl"
+      "io.monoptic.monoql.sql.SqlCommentOn"
+      "io.monoptic.monoql.sql.SqlControl"
+      "io.monoptic.monoql.sql.SqlCreateCatalog"
+      "io.monoptic.monoql.sql.SqlCreateFunction"
+      "io.monoptic.monoql.sql.SqlCreatePrincipal"
+      "io.monoptic.monoql.sql.SqlCreateSchema"
+      "io.monoptic.monoql.sql.SqlCreateTable"
+      "io.monoptic.monoql.sql.SqlCreateTrigger"
+      "io.monoptic.monoql.sql.SqlCreateView"
+      "io.monoptic.monoql.sql.SqlDropObject"
+      "io.monoptic.monoql.sql.SqlGrant"
+      "io.monoptic.monoql.sql.SqlShow"
+      "io.monoptic.monoql.sql.SqlUse"
+      "org.apache.calcite.sql.SqlCreate"
+      "org.apache.calcite.sql.SqlDrop"
+      "org.apache.calcite.sql.dialect.CalciteSqlDialect"
+      "java.util.LinkedHashMap"
+    ]
+
+    # Every keyword monoql adds is non-reserved, so that it stays usable as an
+    # identifier (and so that the columns of the metadata schema never need
+    # quoting).
+    keywords: [
+      "CATALOGS"
+      "COLUMNS"
+      "COMMENT"
+      "DATABASES"
+      "FIRE"
+      "FUNCTIONS"
+      "GRANTS"
+      "IF"
+      "MATERIALIZED"
+      "PARTITIONED"
+      "PARTITIONS"
+      "PAUSE"
+      "REFRESH"
+      "RENAME"
+      "RESUME"
+      "ROLES"
+      "SCHEDULE"
+      "SCHEMAS"
+      "SETTINGS"
+      "TABLES"
+      "TBLPROPERTIES"
+      "TRIGGERS"
+      "USE"
+      "USERS"
+      "VIEWS"
+    ]
+
+    nonReservedKeywordsToAdd: [
+      "CATALOGS"
+      "COLUMNS"
+      "COMMENT"
+      "DATABASES"
+      "FIRE"
+      "FUNCTIONS"
+      "GRANTS"
+      "IF"
+      "MATERIALIZED"
+      "PARTITIONED"
+      "PARTITIONS"
+      "PAUSE"
+      "REFRESH"
+      "RENAME"
+      "RESUME"
+      "ROLES"
+      "SCHEDULE"
+      "SCHEMAS"
+      "SETTINGS"
+      "TABLES"
+      "TBLPROPERTIES"
+      "TRIGGERS"
+      "USE"
+      "USERS"
+      "VIEWS"
+    ]
+
+    # Tried, with two tokens of lookahead, before the core statements.
+    statementParserMethods: [
+      "SqlGrantStmt()"
+      "SqlControlStmt()"
+      "SqlShowStmt()"
+      "SqlUseStmt()"
+      "SqlAlterTableStmt()"
+      "SqlCommentOnStmt()"
+    ]
+
+    createStatementParserMethods: [
+      "SqlCreateAny"
+    ]
+
+    dropStatementParserMethods: [
+      "SqlDropAny"
+    ]
+
+    implementationFiles: [
+      "parserImpls.ftl"
+    ]
+  }
+}
+
+freemarkerLinks: {
+  includes: includes/
+}

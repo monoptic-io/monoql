@@ -17,7 +17,6 @@
 package org.apache.calcite.schema.impl;
 
 import org.apache.calcite.adapter.java.JavaTypeFactory;
-import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.materialize.MaterializationKey;
@@ -30,11 +29,11 @@ import org.apache.calcite.schema.Schemas;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.TranslatableTable;
 
+import io.monoptic.monoql.calcite.LegacyJdbc;
+
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.Type;
-import java.sql.DriverManager;
-import java.sql.SQLException;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -50,21 +49,6 @@ import static java.util.Objects.requireNonNull;
 public class MaterializedViewTable extends ViewTable {
 
   private final MaterializationKey key;
-
-  /**
-   * Internal connection, used to execute queries to materialize views.
-   * To be used only by Calcite internals. And sparingly.
-   */
-  public static final CalciteConnection MATERIALIZATION_CONNECTION;
-
-  static {
-    try {
-      MATERIALIZATION_CONNECTION = DriverManager.getConnection("jdbc:calcite:")
-          .unwrap(CalciteConnection.class);
-    } catch (SQLException e) {
-      throw new RuntimeException(e);
-    }
-  }
 
   public MaterializedViewTable(Type elementType,
       RelProtoDataType relDataType,
@@ -120,12 +104,12 @@ public class MaterializedViewTable extends ViewTable {
     @Override public TranslatableTable apply(List<? extends @Nullable Object> arguments) {
       assert arguments.isEmpty();
       CalcitePrepare.ParseResult parsed =
-          Schemas.parse(MATERIALIZATION_CONNECTION, schema, schemaPath,
+          Schemas.parse(LegacyJdbc.materializationConnection(), schema, schemaPath,
               viewSql);
       final List<String> schemaPath1 =
           schemaPath != null ? schemaPath : schema.path(null);
       final JavaTypeFactory typeFactory =
-          MATERIALIZATION_CONNECTION.getTypeFactory();
+          LegacyJdbc.materializationConnection().getTypeFactory();
       return new MaterializedViewTable(typeFactory.getJavaClass(parsed.rowType),
           RelDataTypeImpl.proto(parsed.rowType), viewSql, schemaPath1, viewPath, key);
     }

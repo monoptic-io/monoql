@@ -117,7 +117,10 @@ val generatedVersionDir = layout.buildDirectory.get().file("generated/sources/ve
 val versionClass by tasks.registering(Sync::class) {
     val re = Regex("^(\\d+)\\.(\\d+).*")
 
-    val version = project.version.toString()
+    // monoql: this generates the version reported by the (legacy) Calcite JDBC
+    // driver, so it is the version of the upstream release we are based on,
+    // not the version of monoql.
+    val version = rootProject.extra["calcite.version"].toString()
     val matchResult = re.find(version) ?: throw GradleException("Unable to parse major.minor version parts from project.version '$version'")
     val (major, minor) = matchResult.destructured
 

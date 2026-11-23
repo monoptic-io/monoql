@@ -23,11 +23,12 @@ import org.apache.calcite.profile.ProfilerImpl;
 import org.apache.calcite.rel.metadata.NullSentinel;
 import org.apache.calcite.schema.ScannableTable;
 import org.apache.calcite.schema.Table;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.util.ImmutableBitSet;
 
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
+
+import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,7 +69,7 @@ class ProfilerLatticeStatisticProvider implements LatticeStatisticProvider {
           ImmutableList.of();
       final Enumerable<List<Comparable>> rows =
           ((ScannableTable) table).scan(
-              DataContexts.of(MaterializedViewTable.MATERIALIZATION_CONNECTION,
+              DataContexts.of(LegacyJdbc.materializationConnection(),
                   lattice.rootSchema.plus()))
               .select(values -> {
                 for (int i = 0; i < values.length; i++) {

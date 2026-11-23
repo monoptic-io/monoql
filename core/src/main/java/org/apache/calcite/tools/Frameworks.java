@@ -16,9 +16,7 @@
  */
 package org.apache.calcite.tools;
 
-import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.jdbc.CalciteSchema;
-import org.apache.calcite.jdbc.Driver;
 import org.apache.calcite.materialize.SqlStatisticProvider;
 import org.apache.calcite.plan.Context;
 import org.apache.calcite.plan.Contexts;
@@ -27,7 +25,6 @@ import org.apache.calcite.plan.RelOptCostFactory;
 import org.apache.calcite.plan.RelOptSchema;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitDef;
-import org.apache.calcite.prepare.CalcitePrepareImpl;
 import org.apache.calcite.prepare.PlannerImpl;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.rex.RexExecutor;
@@ -43,15 +40,13 @@ import org.apache.calcite.sql2rel.StandardConvertletTable;
 import org.apache.calcite.statistic.QuerySqlStatisticProvider;
 import org.apache.calcite.util.Util;
 
-import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
+
+import io.monoptic.monoql.calcite.StandalonePrepare;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
-import java.sql.Connection;
 import java.util.List;
-import java.util.Properties;
-import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -60,10 +55,6 @@ import static java.util.Objects.requireNonNull;
  * server first.
  */
 public class Frameworks {
-
-  /** Caches an instance of the JDBC driver. */
-  private static final Supplier<Driver> DRIVER_SUPPLIER =
-      Suppliers.memoize(Driver::new);
 
   private Frameworks() {
   }
@@ -176,23 +167,10 @@ public class Frameworks {
    */
   public static <R> R withPrepare(FrameworkConfig config,
       BasePrepareAction<R> action) {
-    try {
-      final Properties info = new Properties();
-      if (config.getTypeSystem() != RelDataTypeSystem.DEFAULT) {
-        info.setProperty(CalciteConnectionProperty.TYPE_SYSTEM.camelName(),
-            config.getTypeSystem().getClass().getName());
-      }
-      // Connect via a Driver instance. Don't use DriverManager because driver
-      // auto-loading can get broken by shading and jar-repacking.
-      Connection connection =
-          DRIVER_SUPPLIER.get().connect("jdbc:calcite:", info);
-      final CalciteServerStatement statement =
-          connection.createStatement()
-              .unwrap(CalciteServerStatement.class);
-      return new CalcitePrepareImpl().perform(statement, config, action);
-    } catch (Exception e) {
-      throw new RuntimeException(e);
-    }
+    // monoql: upstream opens a "jdbc:calcite:" connection here, and takes
+    // the planning environment from one of its statements. We build the
+    // environment directly; there is no driver.
+    return StandalonePrepare.perform(config, action);
   }
 
   /**

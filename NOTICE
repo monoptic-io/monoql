@@ -1,3 +1,13 @@
+monoql
+Copyright 2026 Monoptic LLC
+
+monoql is a derivative work of Apache Calcite. It is not a project of, and is
+not endorsed by, The Apache Software Foundation. The changes Monoptic made to
+Apache Calcite's files are described in UPSTREAM.md. The notice of the
+original work follows.
+
+--------------------------------------------------------------------------
+
 Apache Calcite
 Copyright 2012-2026 The Apache Software Foundation
 

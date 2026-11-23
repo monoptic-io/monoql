@@ -23,6 +23,9 @@ plugins {
 
 dependencies {
     api(project(":core"))
+    // monoql: SplunkDriver extends the jdbc:calcite: driver, which no longer
+    // lives in core. This adapter is carried from upstream as it is.
+    api(project(":legacy-jdbc"))
     api(project(":linq4j"))
     api("com.google.guava:guava")
     api("org.apache.calcite.avatica:avatica-core")

@@ -21,7 +21,6 @@ import org.apache.calcite.DataContexts;
 import org.apache.calcite.adapter.clone.CloneSchema;
 import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.jdbc.CalciteConnection;
-import org.apache.calcite.jdbc.CalciteMetaImpl;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.linq4j.AbstractQueryable;
@@ -40,6 +39,8 @@ import org.apache.calcite.util.Util;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+
+import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -121,7 +122,7 @@ public class MaterializationService {
     }
 
     final CalciteConnection connection =
-        CalciteMetaImpl.connect(schema.root(), null);
+        LegacyJdbc.connect("Materialization", schema.root(), null);
     CalciteSchema.TableEntry tableEntry;
     // If the user says the materialization exists, first try to find a table
     // with the name and if none can be found, lookup a view in the schema
@@ -379,7 +380,7 @@ public class MaterializationService {
     @Override public Table createTable(CalciteSchema schema, String viewSql,
         @Nullable List<String> viewSchemaPath) {
       final CalciteConnection connection =
-          CalciteMetaImpl.connect(schema.root(), null);
+          LegacyJdbc.connect("Materialization", schema.root(), null);
       final ImmutableMap<CalciteConnectionProperty, String> map =
           ImmutableMap.of(CalciteConnectionProperty.CREATE_MATERIALIZATIONS,
               "false");

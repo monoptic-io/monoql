@@ -28,6 +28,8 @@ import org.apache.calcite.schema.TranslatableTable;
 
 import com.google.common.collect.ImmutableList;
 
+import io.monoptic.monoql.calcite.LegacyJdbc;
+
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.Type;
@@ -74,7 +76,7 @@ public class ViewTableMacro implements TableMacro {
 
   @Override public TranslatableTable apply(List<? extends @Nullable Object> arguments) {
     final CalciteConnection connection =
-        MaterializedViewTable.MATERIALIZATION_CONNECTION;
+        LegacyJdbc.materializationConnection();
     CalcitePrepare.AnalyzeViewResult parsed =
         Schemas.analyzeView(connection, schema, schemaPath, viewSql, viewPath,
             modifiable != null && modifiable);

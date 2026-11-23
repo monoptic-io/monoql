@@ -19,11 +19,12 @@ package org.apache.calcite.materialize;
 import org.apache.calcite.DataContexts;
 import org.apache.calcite.schema.ScannableTable;
 import org.apache.calcite.schema.Table;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.util.ImmutableBitSet;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+
+import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -67,7 +68,7 @@ class SqlLatticeStatisticProvider implements LatticeStatisticProvider {
     final @Nullable Object[] values =
         Iterables.getOnlyElement(
             ((ScannableTable) table).scan(
-                DataContexts.of(MaterializedViewTable.MATERIALIZATION_CONNECTION,
+                DataContexts.of(LegacyJdbc.materializationConnection(),
                     lattice.rootSchema.plus())));
     Number value = (Number) values[0];
     requireNonNull(value, () -> "count(*) produced null in " + sql);

@@ -16,8 +16,10 @@
  */
 package org.apache.calcite.jdbc;
 
+import org.apache.calcite.DataContext;
 import org.apache.calcite.linq4j.function.Experimental;
 import org.apache.calcite.linq4j.tree.Expression;
+import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.schema.Function;
@@ -27,11 +29,13 @@ import org.apache.calcite.schema.SchemaVersion;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.Wrapper;
+import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.schema.impl.StarTable;
 import org.apache.calcite.schema.lookup.LikePattern;
 import org.apache.calcite.schema.lookup.Lookup;
 import org.apache.calcite.schema.lookup.Named;
+import org.apache.calcite.util.BuiltInMethod;
 import org.apache.calcite.util.LazyReference;
 import org.apache.calcite.util.NameMap;
 import org.apache.calcite.util.NameMultimap;
@@ -41,6 +45,8 @@ import org.apache.calcite.util.Pair;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
+
+import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -497,7 +503,7 @@ public abstract class CalciteSchema {
    */
   public static CalciteSchema createRootSchema(boolean addMetadataSchema,
       boolean cache, String name) {
-    final Schema rootSchema = new CalciteConnectionImpl.RootSchema();
+    final Schema rootSchema = new RootSchema();
     return createRootSchema(addMetadataSchema, cache, name, rootSchema);
   }
 
@@ -511,9 +517,29 @@ public abstract class CalciteSchema {
       rootSchema = new SimpleCalciteSchema(null, schema, name);
     }
     if (addMetadataSchema) {
-      rootSchema.add("metadata", MetadataSchema.INSTANCE);
+      // monoql: the old "metadata" schema is backed by the legacy JDBC
+      // driver. It is added only if that driver is on the class path, which
+      // in practice means: only when running upstream's tests.
+      final Schema metadataSchema = LegacyJdbc.metadataSchema();
+      if (metadataSchema != null) {
+        rootSchema.add("metadata", metadataSchema);
+      }
     }
     return rootSchema;
+  }
+
+  /** Schema that has no parents. */
+  static class RootSchema extends AbstractSchema {
+    RootSchema() {
+      super();
+    }
+
+    @Override public Expression getExpression(@Nullable SchemaPlus parentSchema,
+        String name) {
+      return Expressions.call(
+          DataContext.ROOT,
+          BuiltInMethod.DATA_CONTEXT_GET_ROOT_SCHEMA.method);
+    }
   }
 
   @Experimental

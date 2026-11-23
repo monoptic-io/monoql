@@ -39,14 +39,14 @@ import org.apache.calcite.schema.lookup.Lookup;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
+import io.monoptic.monoql.calcite.LegacyJdbc;
+
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
-import static org.apache.calcite.schema.impl.MaterializedViewTable.MATERIALIZATION_CONNECTION;
 
 /**
  * Schema that contains in-memory copies of tables from a JDBC schema.
@@ -76,7 +76,7 @@ public class CloneSchema extends AbstractSchema {
       if (table instanceof QueryableTable) {
         final QueryableTable sourceTable = (QueryableTable) table;
         map.put(name,
-            createCloneTable(MATERIALIZATION_CONNECTION, sourceTable, name));
+            createCloneTable(LegacyJdbc.materializationConnection(), sourceTable, name));
       }
     }
     return map;

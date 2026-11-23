@@ -20,6 +20,8 @@ plugins {
 
 dependencies {
     api(project(":core"))
+    // monoql: the jdbc:calcite: driver, which most of these tests go through.
+    api(project(":legacy-jdbc"))
     api("org.checkerframework:checker-qual")
 
     implementation(platform("org.junit:junit-bom"))

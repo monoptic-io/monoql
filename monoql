@@ -1,0 +1,26 @@
+#!/bin/bash
+# Copyright (c) Monoptic LLC.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Launches the monoql shell from a source checkout, building it first.
+#
+#   ./monoql                    interactive shell
+#   ./monoql -e "show tables"   run a statement and exit
+#   ./monoql -f script.sql      run a script and exit
+#   ./monoql --help
+#
+# Set MONOQL_SKIP_BUILD=1 to skip the (incremental) build.
+
+root=$0
+if [[ -L "$root" ]]; then
+  root=$(readlink "$root")
+fi
+root=$(cd "$(dirname "$root")" && pwd)
+
+launcher=$root/monoql-repl/build/install/monoql/bin/monoql
+
+if [[ "$MONOQL_SKIP_BUILD" != "1" || ! -x "$launcher" ]]; then
+  "$root/gradlew" -p "$root" --console plain -q :monoql-repl:installDist >&2 || exit 1
+fi
+
+exec "$launcher" "$@"
