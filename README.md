@@ -96,16 +96,17 @@ packages and, as far as possible, its text.
 | `monoql-engine` | The parser extensions, the `METADATA` schema, the lowering of statements to DML, and `Session`. |
 | `monoql-jdbc` | A catalog over any JDBC database. An ordinary SPI implementation, in its own jar. |
 | `monoql-repl` | The shell. |
-| `core`, `linq4j` | Calcite's planner and runtime, with the JDBC driver removed. |
-| `legacy-jdbc` | The removed driver. Used only by upstream's tests, by way of `testkit`. |
-| everything else | Calcite's other modules (adapters, `babel`, `server`, `plus`, ...), carried unchanged. |
+| `core`, `linq4j` | Calcite's parser, validator, planner and runtime, with the JDBC driver removed. |
+| `legacy-jdbc`, `testkit` | The removed driver, and Calcite's test harness, which uses it. Test-only. |
+
+Calcite's adapters, its `server`, `babel` and `plus` modules, its website and
+its release tooling are not here; monoql does not use them.
 
 ## Building
 
 ```
-./gradlew :monoql-catalog:test :monoql-engine:test :monoql-jdbc:test :monoql-repl:test
-./gradlew :core:test        # upstream's suite, about a minute
-./gradlew build             # everything
+./gradlew build     # compiles everything and runs every test, in a couple of minutes
+./gradlew :monoql-engine:test --tests '*LoweringTest'
 ```
 
 ## Status

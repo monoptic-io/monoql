@@ -9,10 +9,10 @@ monoql is a fork of Apache Calcite. Read `README.md` for what it is,
 ## Commands
 
 ```
+./gradlew build                            # everything, a couple of minutes
 ./gradlew :monoql-catalog:test :monoql-engine:test :monoql-jdbc:test :monoql-repl:test
 ./gradlew :monoql-engine:test --tests '*LoweringTest'
-./gradlew :core:test                       # upstream's suite, about a minute
-./gradlew :core:checkstyleMain :core:autostyleJavaCheck rat
+./gradlew :core:test                       # Calcite's suite, about a minute
 ./monoql -e "show tables"                  # the shell; builds first
 ```
 
@@ -24,8 +24,12 @@ JDK 21, which must be installed.
 - **New code goes in `io.monoptic` packages**, in the `monoql-*` modules,
   with the Monoptic header. Do not add new classes under
   `org.apache.calcite`.
-- **Keep changes to upstream files small**, and mark each with a
-  `// monoql:` comment saying why. List new ones in `UPSTREAM.md`.
+- **Prefer less code, and say what is true.** Delete what monoql does not
+  use rather than carrying it. Do not keep features that look supported but
+  are not.
+- **Mark changes to Calcite's files** with a `// monoql:` comment saying why,
+  and list them in `UPSTREAM.md`, so the next merge knows what must stay
+  true.
 - **No `jdbc:calcite:`.** Nothing under `io.monoptic` may depend on
   `legacy-jdbc` or `testkit`, or open a Calcite connection. Sessions are
   built from a `FrameworkConfig`. `NoDriverTest` enforces this.

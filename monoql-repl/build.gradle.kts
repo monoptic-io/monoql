@@ -19,7 +19,6 @@ dependencies {
     runtimeOnly(project(":monoql-jdbc"))
     runtimeOnly("org.apache.logging.log4j:log4j-slf4j-impl")
 
-    testImplementation("org.junit.jupiter:junit-jupiter")
 }
 
 application {
@@ -28,25 +27,3 @@ application {
     // JLine reaches the terminal through native calls.
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-
-tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
-}
-
-tasks.withType<Javadoc>().configureEach {
-    (options as StandardJavadocDocletOptions).source = "21"
-}
-
-// New io.monoptic code carries a Monoptic header rather than the ASF one, and
-// does not follow upstream's checkstyle profile.
-tasks.matching { it.name.startsWith("checkstyle") || it.name.startsWith("autostyle") }
-    .configureEach { enabled = false }
-
-// A shell writes to System.out; that is its job.
-tasks.matching { it.name.startsWith("forbiddenApis") }
-    .configureEach { enabled = false }

@@ -21,8 +21,3 @@ dependencies {
     implementation("org.slf4j:slf4j-api")
     implementation("org.checkerframework:checker-qual")
 }
-
-// The sources here are upstream's, moved; the package-info files stayed
-// behind in core, and one new file has a Monoptic header.
-tasks.matching { it.name.startsWith("checkstyle") || it.name.startsWith("autostyle") }
-    .configureEach { enabled = false }

@@ -17,25 +17,6 @@ dependencies {
     implementation("org.apache.commons:commons-dbcp2")
 
     testImplementation(project(":monoql-engine"))
-    testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.hsqldb:hsqldb::jdk8")
     testRuntimeOnly("org.apache.logging.log4j:log4j-slf4j-impl")
 }
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-
-tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
-}
-
-tasks.withType<Javadoc>().configureEach {
-    (options as StandardJavadocDocletOptions).source = "21"
-}
-
-// New io.monoptic code carries a Monoptic header rather than the ASF one, and
-// does not follow upstream's checkstyle profile.
-tasks.matching { it.name.startsWith("checkstyle") || it.name.startsWith("autostyle") }
-    .configureEach { enabled = false }
