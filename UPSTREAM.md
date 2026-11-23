@@ -122,6 +122,8 @@ Also:
 - Artifacts are published under `io.monoptic.monoql`, never under
   `org.apache.calcite`, because they are not Apache's. Forked modules keep
   their artifact names (`calcite-core`, `calcite-linq4j`).
+- `.github/workflows/build.yml` is monoql's only CI: it runs `./gradlew build`
+  on JDK 21. Upstream's workflows under `.github` stay deleted.
 - `gradle/gradle-daemon-jvm.properties` pins the Gradle daemon to JDK 21,
   since Gradle 8 cannot run on 25.
 - `CalciteDriverVersion`, which upstream generates from the build version,
