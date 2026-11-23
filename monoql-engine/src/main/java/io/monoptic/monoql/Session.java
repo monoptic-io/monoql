@@ -13,15 +13,14 @@ import io.monoptic.monoql.engine.Lowered;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.tools.FrameworkConfig;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
 /** A conversation with monoql: a set of mounted catalogs, a current catalog
  * and schema, and the means to run statements against them.
  *
- * <p>A session is cheap, holds no connection, and is not thread-safe. */
+ * <p>A session is cheap, holds no connection, and is not thread-safe,
+ * except for {@link #cancel}. */
 public final class Session implements AutoCloseable {
   private final Engine engine;
 
@@ -48,24 +47,30 @@ public final class Session implements AutoCloseable {
     engine.use(catalog, schema);
   }
 
-  /** Executes one statement. */
+  /** Executes one statement. The rows of a query are read as the result
+   * is; close the result unless you read them all. */
   public Result execute(String sql) {
     return engine.execute(sql);
   }
 
-  /** Executes statements separated by semicolons, stopping at the first
-   * failure; returns one result per statement. */
-  public List<Result> executeScript(String sql) {
-    final List<Result> results = new ArrayList<>();
-    engine.executeScript(sql, results::add);
-    return results;
-  }
-
   /** Executes statements separated by semicolons, handing each result to
    * {@code sink} as soon as it is available, and stopping at the first
-   * failure. */
+   * failure. A result is closed when the sink returns, so the sink must
+   * read the rows it wants. */
   public void executeScript(String sql, Consumer<Result> sink) {
     engine.executeScript(sql, sink);
+  }
+
+  /** Asks the statement that is running, or whose rows are being read, to
+   * stop; it then fails with
+   * {@link java.util.concurrent.CancellationException}. This is the one
+   * method that may be called from another thread.
+   *
+   * <p>The engine notices between rows of the result, and the in-memory
+   * catalog between rows of a scan. A statement waiting on another system
+   * stops when that system next answers. */
+  public void cancel() {
+    engine.cancel();
   }
 
   /** Returns what a statement means, as DML and queries against the

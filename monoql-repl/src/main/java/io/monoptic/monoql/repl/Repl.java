@@ -191,6 +191,9 @@ public final class Repl {
       if (formatter != null) {
         shell.format(formatter);
       }
+      // Ctrl-C while a statement runs stops the statement. (While a line is
+      // being edited, the line reader has its own handler.)
+      terminal.handle(Terminal.Signal.INT, signal -> shell.cancel());
       final Completions completions = new Completions(session);
       final Completer completer = (reader, line, candidates) -> {
         final String word = line.word().substring(0, line.wordCursor());

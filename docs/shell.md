@@ -39,7 +39,8 @@ a script stops at its first failure.
   paths (`metadata.gr⇥`, `orders.⇥`). Names are offered in the case you are
   typing in, and quoted when they need to be.
 - Ctrl-R searches history, which is kept in `~/.monoql/history`. Ctrl-C
-  abandons the current input. Ctrl-D leaves.
+  abandons the current input, or stops the statement that is running.
+  Ctrl-D leaves.
 - The prompt shows the current catalog and schema.
 
 ## Commands
@@ -55,7 +56,7 @@ a script stops at its first failure.
 | `!lower statement` | Print the DML that a statement is shorthand for, without running it. |
 | `!explain statement` | Print the plan. For a DDL statement, the plan of what it lowers to. |
 | `!run file` | Run a script: statements, and commands on lines of their own. |
-| `!format [table\|vertical\|csv\|json]` | Show or set the output format. `vertical` shows long values whole. |
+| `!format [table\|vertical\|csv\|json]` | Show or set the output format. Every format prints rows as they are read. `table` prints 1,000 rows at a time, each batch as a table of its own with its own header and column widths; `vertical` shows long values whole. |
 | `!timing [on\|off]` | Show or set timing. |
 | `!verbose [on\|off]` | Show or set printing of stack traces with errors. |
 | `!history`, `!clear` | |

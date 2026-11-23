@@ -173,6 +173,14 @@ default Optional<org.apache.calcite.schema.Table> bind(TableInfo table)
   `UPDATE` and `DELETE` by computing the affected rows and handing them over.
   Without it, writes are left to Calcite: a JDBC table, for example, gets the
   whole statement pushed down.
+- A scan that may run long should stop when the statement is cancelled
+  (`Session.cancel()`; Ctrl-C in the shell). The engine checks between the
+  rows it hands back, but a query that is still working towards its first
+  row can only be stopped where it reads: check
+  `DataContext.Variable.CANCEL_FLAG` in the scan and throw
+  `CancellationException`, as the in-memory catalog does. The `jdbc` catalog
+  does not: a query waiting on another database stops when that database
+  next returns a row.
 - Return empty (the default) and the table is **metadata only**. It can be
   described, granted on, and used in views and plans; a query that needs its
   rows fails with "Catalog X does not provide the rows of table Y". This is

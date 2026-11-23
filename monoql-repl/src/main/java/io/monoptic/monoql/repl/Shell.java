@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
+import java.util.concurrent.CancellationException;
 
 /** The shell, minus the terminal: takes one input at a time (a
  * {@code !command}, or SQL), runs it against a {@link Session}, and prints
@@ -104,6 +105,12 @@ final class Shell {
     this.timing = timing;
   }
 
+  /** Stops the statement that is running, if any. For a signal handler:
+   * this may be called from any thread. */
+  void cancel() {
+    session.cancel();
+  }
+
   /** Whether any input since the shell started has failed. */
   boolean failed() {
     return failed;
@@ -134,6 +141,9 @@ final class Shell {
         return command(trimmed.substring(1));
       }
       sql(trimmed);
+    } catch (CancellationException e) {
+      failed = true;
+      out.println(style.red("Cancelled"));
     } catch (RuntimeException | StackOverflowError e) {
       error(e);
     } finally {
@@ -157,25 +167,26 @@ final class Shell {
   private void sql(String sql) {
     final long[] start = {System.nanoTime()};
     session.executeScript(sql, result -> {
-      print(result, System.nanoTime() - start[0]);
+      print(result, start[0]);
       start[0] = System.nanoTime();
     });
   }
 
-  private void print(Result result, long nanos) {
-    final String elapsed = timing
-        ? String.format(Locale.ROOT, " in %.3fs", nanos / 1e9) : "";
-    if (result.isQuery()) {
-      formatter.print(result, out, style);
-      if (formatter == Formatter.TABLE || formatter == Formatter.VERTICAL) {
-        final int n = result.rows().size();
-        out.println(style.dim(n + (n == 1 ? " row" : " rows") + elapsed));
-      }
-    } else if (formatter == Formatter.TABLE
-        || formatter == Formatter.VERTICAL) {
-      final long n = result.updateCount();
-      out.println(style.dim("OK, " + n + (n == 1 ? " row" : " rows")
-          + " affected" + elapsed));
+  /** Prints a result. Rows are printed as they are read, so the time
+   * reported is the time to produce and print them all. */
+  private void print(Result result, long start) {
+    final boolean chatty = formatter == Formatter.TABLE
+        || formatter == Formatter.VERTICAL;
+    final long n = result.isQuery() ? formatter.print(result, out, style)
+        : result.updateCount();
+    if (chatty) {
+      final String elapsed = timing
+          ? String.format(Locale.ROOT, " in %.3fs",
+              (System.nanoTime() - start) / 1e9)
+          : "";
+      out.println(style.dim((result.isQuery() ? "" : "OK, ")
+          + n + (n == 1 ? " row" : " rows")
+          + (result.isQuery() ? "" : " affected") + elapsed));
     }
   }
 

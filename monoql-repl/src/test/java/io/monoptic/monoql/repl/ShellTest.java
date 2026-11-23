@@ -210,6 +210,37 @@ class ShellTest {
     assertTrue(values(completions, "SEL", "SEL").contains("SELECT"));
   }
 
+  /** A long result is printed a batch at a time, each batch a table of
+   * its own. */
+  @Test void longResults() {
+    run("create table t (id int, name varchar);");
+    final StringBuilder insert = new StringBuilder("insert into t values ");
+    for (int i = 1; i <= Formatter.BATCH; i++) {
+      insert.append('(').append(i).append(", 'a'), ");
+    }
+    run(insert + "(" + (Formatter.BATCH + 1) + ", 'longer');");
+    final String[] lines = run("select * from t order by id;").split("\n");
+    final int second = Formatter.BATCH + 4;
+    assertEquals("│ 1000 │ a    │", lines[second - 2]);
+    assertEquals("└──────┴──────┘", lines[second - 1]);
+    assertEquals("┌──────┬────────┐", lines[second]);
+    assertEquals("│ ID   │ NAME   │", lines[second + 1]);
+    assertEquals("│ 1001 │ longer │", lines[second + 3]);
+    assertEquals("1001 rows", lines[lines.length - 1]);
+
+    // Exactly one batch: no empty table after it.
+    final String[] exact =
+        run("select * from t where id <= 1000;").split("\n");
+    assertEquals(Formatter.BATCH + 5, exact.length);
+
+    shell.format(Formatter.JSON);
+    final String json = run("select * from t where id > 999 order by id;");
+    assertEquals("[\n"
+        + "  {\"ID\": 1000, \"NAME\": \"a\"},\n"
+        + "  {\"ID\": 1001, \"NAME\": \"longer\"}\n"
+        + "]\n", json);
+  }
+
   private static List<String> values(Completions completions, String buffer,
       String word) {
     return completions.complete(buffer, word).stream()

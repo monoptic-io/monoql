@@ -13,39 +13,46 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 
-/** The outcome of a statement: either rows, or a count of rows affected. */
-public final class Result {
+/** The outcome of a statement: either rows, or a count of rows affected.
+ *
+ * <p>The rows of a query are not held in memory; they are produced as they
+ * are read, once, in order. A result holds resources (for a table in
+ * another database, a connection) until its last row has been read or it is
+ * closed, so use try-with-resources unless you read every row. */
+public final class Result implements Iterable<Object[]>, AutoCloseable {
   private final RelDataType rowType;
-  private final List<Object[]> rows;
   private final long updateCount;
+  /** Where rows come from, until they have all been read; then null. */
+  private Iterator<Object[]> source;
+  private AutoCloseable resource;
+  private boolean iterating;
 
-  private Result(RelDataType rowType, List<Object[]> rows, long updateCount) {
+  private Result(RelDataType rowType, Iterator<Object[]> source,
+      AutoCloseable resource, long updateCount) {
     this.rowType = rowType;
-    this.rows = rows;
+    this.source = source;
+    this.resource = resource;
     this.updateCount = updateCount;
   }
 
-  /** Creates the result of a query. Values are converted from the engine's
-   * internal representation to java.time and friends. */
-  public static Result ofRows(RelDataType rowType, List<Object[]> rows) {
-    final List<RelDataTypeField> fields = rowType.getFieldList();
-    final List<Object[]> converted = new ArrayList<>(rows.size());
-    for (Object[] row : rows) {
-      final Object[] r = new Object[row.length];
-      for (int i = 0; i < r.length; i++) {
-        r[i] = external(fields.get(i).getType().getSqlTypeName(), row[i]);
-      }
-      converted.add(r);
-    }
-    return new Result(rowType, converted, -1);
+  /** Creates the result of a query from rows in the engine's internal
+   * representation. Values are converted to java.time and friends as they
+   * are read.
+   *
+   * @param resource Closed when the last row has been read, or when the
+   *     result is closed; may be null */
+  public static Result ofRows(RelDataType rowType, Iterator<Object[]> rows,
+      AutoCloseable resource) {
+    return new Result(rowType, rows, resource, -1);
   }
 
   /** Creates the result of DML, or of a statement that lowers to DML. */
   public static Result ofCount(long updateCount) {
-    return new Result(null, List.of(), updateCount);
+    return new Result(null, null, null, updateCount);
   }
 
   private static Object external(SqlTypeName type, Object value) {
@@ -86,8 +93,53 @@ public final class Result {
     return rowType == null ? List.of() : rowType.getFieldNames();
   }
 
-  public List<Object[]> rows() {
-    return rows;
+  /** Returns an iterator over the rows; there is only one, because rows
+   * can be read only once. Empty unless {@link #isQuery()}. */
+  @Override public Iterator<Object[]> iterator() {
+    if (iterating) {
+      throw new IllegalStateException(
+          "The rows of this result have already been read");
+    }
+    iterating = true;
+    final List<RelDataTypeField> fields =
+        rowType == null ? List.of() : rowType.getFieldList();
+    return new Iterator<>() {
+      @Override public boolean hasNext() {
+        if (source != null && !source.hasNext()) {
+          close();
+        }
+        return source != null;
+      }
+
+      @Override public Object[] next() {
+        if (!hasNext()) {
+          throw new NoSuchElementException();
+        }
+        final Object[] row = source.next();
+        final Object[] r = new Object[row.length];
+        for (int i = 0; i < r.length; i++) {
+          r[i] = external(fields.get(i).getType().getSqlTypeName(), row[i]);
+        }
+        return r;
+      }
+    };
+  }
+
+  /** Releases whatever the result holds; rows not yet read are lost. Does
+   * nothing if the rows have all been read. */
+  @Override public void close() {
+    source = null;
+    final AutoCloseable r = resource;
+    resource = null;
+    if (r != null) {
+      try {
+        r.close();
+      } catch (RuntimeException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new MonoqlException(e.getMessage(), e);
+      }
+    }
   }
 
   /** Rows affected; -1 if {@link #isQuery()}. */

@@ -16,7 +16,7 @@ final class Sessions {
   /** Runs a query and returns each row as a string, e.g. {@code [1, a]}. */
   static List<String> rows(Session session, String sql) {
     final List<String> rows = new ArrayList<>();
-    for (Object[] row : session.execute(sql).rows()) {
+    for (Object[] row : session.execute(sql)) {
       rows.add(Arrays.deepToString(row));
     }
     return rows;

@@ -9,17 +9,41 @@ import io.monoptic.monoql.Result;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Prints query results. */
+/** Prints query results, reading rows as it prints them. */
 enum Formatter {
   /** A boxed table. Long values are truncated; use {@link #VERTICAL} to see
-   * them whole. */
+   * them whole.
+   *
+   * <p>Rows are read and printed {@link #BATCH} at a time. Each batch is a
+   * table of its own, with its own header, and columns as wide as that
+   * batch needs. */
   TABLE {
-    @Override void print(Result result, PrintWriter out, Style style) {
+    @Override long print(Result result, PrintWriter out, Style style) {
       final List<String> names = result.columnNames();
+      final Iterator<Object[]> rows = result.iterator();
+      final List<Object[]> batch = new ArrayList<>();
+      long count = 0;
+      do {
+        batch.clear();
+        while (batch.size() < BATCH && rows.hasNext()) {
+          batch.add(rows.next());
+        }
+        if (count == 0 || !batch.isEmpty()) {
+          box(names, batch, out, style);
+          out.flush();
+        }
+        count += batch.size();
+      } while (batch.size() == BATCH);
+      return count;
+    }
+
+    private void box(List<String> names, List<Object[]> rows,
+        PrintWriter out, Style style) {
       final int n = names.size();
       final int[] widths = new int[n];
       // A column is right-aligned if it holds numbers and nothing else.
@@ -28,20 +52,12 @@ enum Formatter {
       for (int i = 0; i < n; i++) {
         widths[i] = names.get(i).length();
       }
-      final List<String[]> cells = new ArrayList<>();
-      for (Object[] row : result.rows()) {
-        final String[] line = new String[n];
+      for (Object[] row : rows) {
         for (int i = 0; i < n; i++) {
-          String s = row[i] == null ? "NULL" : oneLine(Formatter.text(row[i]));
-          if (s.length() > MAX_WIDTH) {
-            s = s.substring(0, MAX_WIDTH - 1) + "…";
-          }
-          line[i] = s;
-          widths[i] = Math.max(widths[i], s.length());
+          widths[i] = Math.max(widths[i], cell(row[i]).length());
           numeric[i] |= row[i] instanceof Number;
           text[i] |= row[i] != null && !(row[i] instanceof Number);
         }
-        cells.add(line);
       }
       rule(out, style, widths, '┌', '┬', '┐');
       final StringBuilder header = new StringBuilder();
@@ -52,14 +68,13 @@ enum Formatter {
       }
       out.println(header.append(style.dim("│")));
       rule(out, style, widths, '├', '┼', '┤');
-      for (int r = 0; r < cells.size(); r++) {
+      for (Object[] row : rows) {
         final StringBuilder b = new StringBuilder();
         for (int i = 0; i < n; i++) {
           final String padded =
-              pad(cells.get(r)[i], widths[i], numeric[i] && !text[i]);
+              pad(cell(row[i]), widths[i], numeric[i] && !text[i]);
           b.append(style.dim("│")).append(' ')
-              .append(result.rows().get(r)[i] == null ? style.dim(padded)
-                  : padded)
+              .append(row[i] == null ? style.dim(padded) : padded)
               .append(' ');
         }
         out.println(b.append(style.dim("│")));
@@ -70,14 +85,14 @@ enum Formatter {
 
   /** One column per line; nothing is truncated. */
   VERTICAL {
-    @Override void print(Result result, PrintWriter out, Style style) {
+    @Override long print(Result result, PrintWriter out, Style style) {
       final List<String> names = result.columnNames();
       int width = 0;
       for (String name : names) {
         width = Math.max(width, name.length());
       }
-      int r = 0;
-      for (Object[] row : result.rows()) {
+      long r = 0;
+      for (Object[] row : result) {
         out.println(style.dim("── row " + ++r + " ──"));
         for (int i = 0; i < names.size(); i++) {
           final String value = row[i] == null ? style.dim("NULL")
@@ -86,46 +101,58 @@ enum Formatter {
               + value);
         }
       }
+      return r;
     }
   },
 
   /** RFC 4180. */
   CSV {
-    @Override void print(Result result, PrintWriter out, Style style) {
+    @Override long print(Result result, PrintWriter out, Style style) {
       out.println(String.join(",",
           result.columnNames().stream().map(Formatter::csv).toList()));
-      for (Object[] row : result.rows()) {
+      long count = 0;
+      for (Object[] row : result) {
         final List<String> fields = new ArrayList<>();
         for (Object value : row) {
           fields.add(value == null ? "" : csv(text(value)));
         }
         out.println(String.join(",", fields));
+        ++count;
       }
+      return count;
     }
   },
 
   /** An array of objects. */
   JSON {
-    @Override void print(Result result, PrintWriter out, Style style) {
+    @Override long print(Result result, PrintWriter out, Style style) {
       final List<String> names = result.columnNames();
       out.println("[");
-      for (int r = 0; r < result.rows().size(); r++) {
+      long count = 0;
+      for (final Iterator<Object[]> rows = result.iterator();
+          rows.hasNext();) {
+        final Object[] row = rows.next();
         final StringBuilder b = new StringBuilder("  {");
         for (int i = 0; i < names.size(); i++) {
           b.append(i > 0 ? ", " : "");
           json(b, names.get(i));
           b.append(": ");
-          json(b, result.rows().get(r)[i]);
+          json(b, row[i]);
         }
-        out.println(b.append(r < result.rows().size() - 1 ? "}," : "}"));
+        out.println(b.append(rows.hasNext() ? "}," : "}"));
+        ++count;
       }
       out.println("]");
+      return count;
     }
   };
 
   private static final int MAX_WIDTH = 60;
+  /** How many rows {@link #TABLE} prints as one table. */
+  static final int BATCH = 1000;
 
-  abstract void print(Result result, PrintWriter out, Style style);
+  /** Prints a query result, and returns how many rows it had. */
+  abstract long print(Result result, PrintWriter out, Style style);
 
   static Formatter of(String name) {
     return valueOf(name.toUpperCase(Locale.ROOT));
@@ -137,6 +164,15 @@ enum Formatter {
       return Arrays.deepToString(array);
     }
     return String.valueOf(value);
+  }
+
+  /** A value as it appears in a table: on one line, and not too long. */
+  private static String cell(Object value) {
+    if (value == null) {
+      return "NULL";
+    }
+    final String s = oneLine(text(value));
+    return s.length() > MAX_WIDTH ? s.substring(0, MAX_WIDTH - 1) + "…" : s;
   }
 
   private static String oneLine(String s) {

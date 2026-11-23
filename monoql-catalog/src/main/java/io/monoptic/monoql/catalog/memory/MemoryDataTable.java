@@ -9,7 +9,10 @@ import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.catalog.WritableTable;
 
 import org.apache.calcite.DataContext;
+import org.apache.calcite.linq4j.AbstractEnumerable;
+import org.apache.calcite.linq4j.DelegatingEnumerator;
 import org.apache.calcite.linq4j.Enumerable;
+import org.apache.calcite.linq4j.Enumerator;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -19,6 +22,8 @@ import org.apache.calcite.schema.impl.AbstractTable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Rows of an in-memory table. */
 final class MemoryDataTable extends AbstractTable
@@ -63,9 +68,24 @@ final class MemoryDataTable extends AbstractTable
     return DataTypes.rowType(columns, typeFactory);
   }
 
-  /** Scans a snapshot, so that a statement never sees its own writes. */
+  /** Scans a snapshot, so that a statement never sees its own writes.
+   * The scan stops if the statement is cancelled. */
   @Override public synchronized Enumerable<Object[]> scan(DataContext root) {
-    return Linq4j.asEnumerable(new ArrayList<>(rows));
+    final List<Object[]> snapshot = new ArrayList<>(rows);
+    final AtomicBoolean cancel = DataContext.Variable.CANCEL_FLAG.get(root);
+    return new AbstractEnumerable<>() {
+      @Override public Enumerator<Object[]> enumerator() {
+        final Enumerator<Object[]> e = Linq4j.enumerator(snapshot);
+        return new DelegatingEnumerator<>(e) {
+          @Override public boolean moveNext() {
+            if (cancel != null && cancel.get()) {
+              throw new CancellationException("Statement cancelled");
+            }
+            return super.moveNext();
+          }
+        };
+      }
+    };
   }
 
   @Override public synchronized void insert(List<Object[]> newRows) {

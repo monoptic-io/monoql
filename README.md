@@ -66,10 +66,14 @@ From Java:
 try (Session session = Monoql.builder().build()) {
   session.execute("create table t (id int, name varchar)");
   session.execute("insert into t values (1, 'a')");
-  Result result = session.execute("select * from t");
-  for (Object[] row : result.rows()) { ... }
+  try (Result result = session.execute("select * from t")) {
+    for (Object[] row : result) { ... }
+  }
 }
 ```
+
+Rows are produced as the result is read, and can be read once.
+`session.cancel()`, from another thread, stops a statement that is running.
 
 `Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
 catalog types (`.provider(...)`), and a hook to customize the Calcite
@@ -114,7 +118,6 @@ its release tooling are not here; monoql does not use them.
 This is an early cut. Known gaps, all of them deliberate omissions rather
 than silent no-ops:
 
-- Results are materialized in memory; there is no streaming cursor yet.
 - Materialized views are stored and can be paused and refreshed, but no
   catalog stores materialized rows; they read as their definition.
 - Identifiers follow the SQL standard: unquoted names fold to upper case.
