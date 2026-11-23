@@ -79,6 +79,12 @@ With it mounted, `GRANT`, `REVOKE`, `SHOW GRANTS` and DML on
 `METADATA.GRANTS` work. `CREATE TABLE` fails with "This catalog does not
 support INSERT on TABLES". Nothing parses and then quietly does nothing.
 
+A catalog whose `GRANTS` table can be scanned is also *governed* by it: a
+session that acts as a user is held to those grants, with roles resolved
+through `ROLE_GRANTS` if the catalog has that too. A catalog with no
+`GRANTS` table is not checked by monoql at all. The rules are in
+[the SQL reference](sql.md#enforcement).
+
 Support can be partial within a table, too. A read-only catalog implements
 only `scan`. A table of events (`firings`, `refreshes`) need only implement
 `insert`. A catalog may reject individual rows it cannot honor, by throwing

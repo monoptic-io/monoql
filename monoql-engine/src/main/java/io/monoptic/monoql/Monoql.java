@@ -78,6 +78,7 @@ public final class Monoql {
     UnaryOperator<Frameworks.ConfigBuilder> configurer = b -> b;
     String defaultCatalog;
     String defaultSchema;
+    String user;
 
     private Builder() {
     }
@@ -102,6 +103,22 @@ public final class Monoql {
     public Builder use(String catalog, String schema) {
       this.defaultCatalog = catalog;
       this.defaultSchema = schema;
+      return this;
+    }
+
+    /** Sets who the session acts as. Every statement is then checked
+     * against the {@code GRANTS} of the catalogs it touches: reading a
+     * table takes {@code SELECT} on it, and so on (see docs/sql.md).
+     *
+     * <p>By default a session acts as nobody, and nothing is checked. That
+     * is how grants are set up in the first place. monoql does not
+     * authenticate anyone: whoever builds the session vouches for the
+     * name.
+     *
+     * @param user The name as it appears in grants. An unquoted name in a
+     *     {@code GRANT} statement is stored in upper case */
+    public Builder user(String user) {
+      this.user = user;
       return this;
     }
 
