@@ -210,6 +210,28 @@ class ShellTest {
     assertTrue(values(completions, "SEL", "SEL").contains("SELECT"));
   }
 
+  /** A table is printed as it is read, so its columns are sized from the
+   * first rows only. */
+  @Test void longResults() {
+    run("create table t (id int, name varchar);");
+    final StringBuilder insert = new StringBuilder("insert into t values ");
+    for (int i = 1; i <= Formatter.SAMPLE; i++) {
+      insert.append('(').append(i).append(", 'a'), ");
+    }
+    run(insert + "(" + (Formatter.SAMPLE + 1) + ", 'longer');");
+    final String[] lines = run("select * from t order by id;").split("\n");
+    assertEquals("│ 1000 │ a    │", lines[Formatter.SAMPLE + 2]);
+    assertEquals("│ 1001 │ longer │", lines[Formatter.SAMPLE + 3]);
+    assertEquals("1001 rows", lines[lines.length - 1]);
+
+    shell.format(Formatter.JSON);
+    final String json = run("select * from t where id > 999 order by id;");
+    assertEquals("[\n"
+        + "  {\"ID\": 1000, \"NAME\": \"a\"},\n"
+        + "  {\"ID\": 1001, \"NAME\": \"longer\"}\n"
+        + "]\n", json);
+  }
+
   private static List<String> values(Completions completions, String buffer,
       String word) {
     return completions.complete(buffer, word).stream()

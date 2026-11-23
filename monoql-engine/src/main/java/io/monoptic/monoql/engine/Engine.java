@@ -16,6 +16,8 @@ import io.monoptic.monoql.catalog.WritableTable;
 import io.monoptic.monoql.engine.Lowered.Step;
 
 import org.apache.calcite.jdbc.CalciteSchema;
+import org.apache.calcite.linq4j.Enumerator;
+import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
@@ -199,7 +201,7 @@ public final class Engine implements Lowering.Context {
   }
 
   /** Executes statements separated by semicolons, handing each result to
-   * {@code sink} as it is produced. */
+   * {@code sink} as it is produced, and closing it when the sink returns. */
   public void executeScript(String sql, Consumer<Result> sink) {
     final List<SqlNode> nodes;
     try {
@@ -209,7 +211,9 @@ public final class Engine implements Lowering.Context {
       throw new MonoqlException(e.getMessage(), e);
     }
     for (SqlNode node : nodes) {
-      sink.accept(execute(node));
+      try (Result result = execute(node)) {
+        sink.accept(result);
+      }
     }
   }
 
@@ -259,11 +263,21 @@ public final class Engine implements Lowering.Context {
       }
       return Result.ofCount(count == 0 ? nothingAffected(step) : count);
     }
+    if (step == null) {
+      // The user's own query: hand back a cursor, and read as it is read.
+      final Enumerator<Object[]> cursor =
+          Runtime.open(planner.optimize(root), rootSchema.plus(),
+              planner.typeFactory());
+      return Result.ofRows(root.validatedRowType,
+          Linq4j.enumeratorIterator(cursor), cursor::close);
+    }
+    // A query that a statement lowered to reads metadata, which is small;
+    // and whether it found anything decides what the statement means.
     final List<Object[]> rows = rows(planner, root);
     if (rows.isEmpty()) {
       nothingAffected(step);
     }
-    return Result.ofRows(root.validatedRowType, rows);
+    return Result.ofRows(root.validatedRowType, rows.iterator(), null);
   }
 
   /** Called when a step found no rows. For a step aimed at one catalog,
@@ -436,6 +450,6 @@ public final class Engine implements Lowering.Context {
             .add("PLAN", SqlTypeName.VARCHAR)
             .build();
     return Result.ofRows(rowType,
-        List.<Object[]>of(new Object[] {plan(node)}));
+        List.<Object[]>of(new Object[] {plan(node)}).iterator(), null);
   }
 }

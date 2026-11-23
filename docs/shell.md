@@ -55,7 +55,7 @@ a script stops at its first failure.
 | `!lower statement` | Print the DML that a statement is shorthand for, without running it. |
 | `!explain statement` | Print the plan. For a DDL statement, the plan of what it lowers to. |
 | `!run file` | Run a script: statements, and commands on lines of their own. |
-| `!format [table\|vertical\|csv\|json]` | Show or set the output format. `vertical` shows long values whole. |
+| `!format [table\|vertical\|csv\|json]` | Show or set the output format. Every format prints rows as they are read. `table` sizes its columns from the first 1,000 rows, so a wider value in a later row pushes its line out of alignment; `vertical` shows long values whole. |
 | `!timing [on\|off]` | Show or set timing. |
 | `!verbose [on\|off]` | Show or set printing of stack traces with errors. |
 | `!history`, `!clear` | |

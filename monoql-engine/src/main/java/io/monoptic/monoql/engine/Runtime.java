@@ -8,7 +8,6 @@ import org.apache.calcite.DataContext;
 import org.apache.calcite.adapter.enumerable.EnumerableInterpretable;
 import org.apache.calcite.adapter.enumerable.EnumerableRel;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
-import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.Enumerator;
 import org.apache.calcite.linq4j.QueryProvider;
 import org.apache.calcite.linq4j.QueryProviderImpl;
@@ -26,14 +25,15 @@ import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Runs an enumerable plan: compiles it, binds it to a {@link DataContext},
- * and collects the rows. This is the whole of the execution path; there is
+ * and reads the rows. This is the whole of the execution path; there is
  * no statement, connection or driver behind it. */
 final class Runtime {
   private Runtime() {
   }
 
-  /** Executes a plan and returns its rows, each as an array. */
-  static List<Object[]> execute(RelNode physical, SchemaPlus rootSchema,
+  /** Starts a plan and returns a cursor over its rows, each as an array.
+   * The caller closes it. */
+  static Enumerator<Object[]> open(RelNode physical, SchemaPlus rootSchema,
       JavaTypeFactory typeFactory) {
     if (!(physical instanceof EnumerableRel)) {
       throw new IllegalStateException("Plan is not executable: "
@@ -43,15 +43,42 @@ final class Runtime {
     final Bindable<?> bindable =
         EnumerableInterpretable.toBindable(parameters, null,
             (EnumerableRel) physical, EnumerableRel.Prefer.ARRAY);
-    final Enumerable<?> enumerable =
-        bindable.bind(new Context(rootSchema, typeFactory, parameters));
+    final Enumerator<?> enumerator =
+        bindable.bind(new Context(rootSchema, typeFactory, parameters))
+            .enumerator();
+    if (physical.getRowType().getFieldCount() != 1) {
+      @SuppressWarnings("unchecked") final Enumerator<Object[]> rows =
+          (Enumerator<Object[]>) enumerator;
+      return rows;
+    }
     // A plan with a single column yields bare values, not arrays.
-    final boolean scalar = physical.getRowType().getFieldCount() == 1;
+    return new Enumerator<>() {
+      @Override public Object[] current() {
+        return new Object[] {enumerator.current()};
+      }
+
+      @Override public boolean moveNext() {
+        return enumerator.moveNext();
+      }
+
+      @Override public void reset() {
+        enumerator.reset();
+      }
+
+      @Override public void close() {
+        enumerator.close();
+      }
+    };
+  }
+
+  /** Executes a plan and returns all of its rows. */
+  static List<Object[]> execute(RelNode physical, SchemaPlus rootSchema,
+      JavaTypeFactory typeFactory) {
     final List<Object[]> rows = new ArrayList<>();
-    try (Enumerator<?> enumerator = enumerable.enumerator()) {
+    try (Enumerator<Object[]> enumerator =
+        open(physical, rootSchema, typeFactory)) {
       while (enumerator.moveNext()) {
-        final Object o = enumerator.current();
-        rows.add(scalar ? new Object[] {o} : (Object[]) o);
+        rows.add(enumerator.current());
       }
     }
     return rows;

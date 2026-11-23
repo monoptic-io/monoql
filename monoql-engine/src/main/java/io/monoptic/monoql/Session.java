@@ -48,22 +48,27 @@ public final class Session implements AutoCloseable {
     engine.use(catalog, schema);
   }
 
-  /** Executes one statement. */
+  /** Executes one statement. The rows of a query are read as the result
+   * is; close the result unless you read them all. */
   public Result execute(String sql) {
     return engine.execute(sql);
   }
 
   /** Executes statements separated by semicolons, stopping at the first
-   * failure; returns one result per statement. */
+   * failure; returns one result per statement, with its rows loaded. */
   public List<Result> executeScript(String sql) {
     final List<Result> results = new ArrayList<>();
-    engine.executeScript(sql, results::add);
+    engine.executeScript(sql, result -> {
+      result.rows();
+      results.add(result);
+    });
     return results;
   }
 
   /** Executes statements separated by semicolons, handing each result to
    * {@code sink} as soon as it is available, and stopping at the first
-   * failure. */
+   * failure. A result is closed when the sink returns, so the sink must
+   * read the rows it wants. */
   public void executeScript(String sql, Consumer<Result> sink) {
     engine.executeScript(sql, sink);
   }
