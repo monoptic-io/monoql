@@ -17,7 +17,6 @@ import io.monoptic.monoql.engine.Lowered.Step;
 
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.linq4j.Enumerator;
-import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
@@ -39,8 +38,11 @@ import org.apache.calcite.tools.FrameworkConfig;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /** The engine behind a {@link io.monoptic.monoql.Session}.
@@ -57,6 +59,8 @@ public final class Engine implements Lowering.Context {
   private final MetadataSchema metadata;
   private final Lowering lowering = new Lowering(this);
   private int viewDepth;
+  /** Stops the statement that is running; replaced for each statement. */
+  private volatile AtomicBoolean cancel = new AtomicBoolean();
 
   public Engine(FrameworkConfig config, List<CatalogProvider> providers) {
     this.config = config;
@@ -222,7 +226,15 @@ public final class Engine implements Lowering.Context {
     return lowered != null ? lowered : Lowered.of(sql);
   }
 
+  /** Asks the statement that is running, or whose rows are being read, to
+   * stop; it fails with {@link java.util.concurrent.CancellationException}.
+   * May be called from any thread. */
+  public void cancel() {
+    cancel.set(true);
+  }
+
   private Result execute(SqlNode node) {
+    cancel = new AtomicBoolean();
     if (node instanceof SqlExplain explain) {
       return explainResult(explain.getExplicandum());
     }
@@ -267,9 +279,9 @@ public final class Engine implements Lowering.Context {
       // The user's own query: hand back a cursor, and read as it is read.
       final Enumerator<Object[]> cursor =
           Runtime.open(planner.optimize(root), rootSchema.plus(),
-              planner.typeFactory());
-      return Result.ofRows(root.validatedRowType,
-          Linq4j.enumeratorIterator(cursor), cursor::close);
+              planner.typeFactory(), cancel);
+      return Result.ofRows(root.validatedRowType, iterator(cursor),
+          cursor::close);
     }
     // A query that a statement lowered to reads metadata, which is small;
     // and whether it found anything decides what the statement means.
@@ -278,6 +290,30 @@ public final class Engine implements Lowering.Context {
       nothingAffected(step);
     }
     return Result.ofRows(root.validatedRowType, rows.iterator(), null);
+  }
+
+  /** Reads a cursor a row at a time, and no sooner than asked: asking for
+   * a row must not wait for the one after it. */
+  private static Iterator<Object[]> iterator(Enumerator<Object[]> cursor) {
+    return new Iterator<>() {
+      /** Whether there is a row to return; null if not yet known. */
+      private Boolean has;
+
+      @Override public boolean hasNext() {
+        if (has == null) {
+          has = cursor.moveNext();
+        }
+        return has;
+      }
+
+      @Override public Object[] next() {
+        if (!hasNext()) {
+          throw new NoSuchElementException();
+        }
+        has = null;
+        return cursor.current();
+      }
+    };
   }
 
   /** Called when a step found no rows. For a step aimed at one catalog,
@@ -313,7 +349,7 @@ public final class Engine implements Lowering.Context {
 
   private List<Object[]> rows(QueryPlanner planner, RelRoot root) {
     return Runtime.execute(planner.optimize(root), rootSchema.plus(),
-        planner.typeFactory());
+        planner.typeFactory(), cancel);
   }
 
   /** The rows a modification applies to. For {@code INSERT}, the new rows;

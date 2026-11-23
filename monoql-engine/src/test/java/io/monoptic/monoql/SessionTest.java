@@ -12,6 +12,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -411,13 +413,16 @@ class SessionTest {
   }
 
   @Test void scriptsAndExplain() {
-    final List<Result> results =
-        session.executeScript("create table t (a int); "
-            + "insert into t values (1), (2); select sum(a) from t");
-    assertEquals(3, results.size());
-    assertEquals(2, results.get(1).updateCount());
-    assertTrue(results.get(2).isQuery());
-    assertFalse(results.get(0).isQuery());
+    final List<String> results = new ArrayList<>();
+    session.executeScript("create table t (a int); "
+            + "insert into t values (1), (2); select sum(a) from t",
+        result -> {
+          final List<String> rows = new ArrayList<>();
+          result.forEach(row -> rows.add(Arrays.toString(row)));
+          results.add(result.isQuery() ? rows.toString()
+              : result.updateCount() + " affected");
+        });
+    assertEquals(List.of("1 affected", "2 affected", "[[3]]"), results);
     assertTrue(session.explain("select * from t where a = 1")
         .contains("EnumerableTableScan(table=[[MEMORY, MAIN, T]])"));
     // Explaining a statement explains what it lowers to.

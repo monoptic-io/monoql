@@ -72,8 +72,8 @@ try (Session session = Monoql.builder().build()) {
 }
 ```
 
-Rows are produced as the result is read. `result.rows()` loads them all
-into a list instead.
+Rows are produced as the result is read, and can be read once.
+`session.cancel()`, from another thread, stops a statement that is running.
 
 `Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
 catalog types (`.provider(...)`), and a hook to customize the Calcite

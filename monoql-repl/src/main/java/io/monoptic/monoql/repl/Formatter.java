@@ -19,12 +19,31 @@ enum Formatter {
   /** A boxed table. Long values are truncated; use {@link #VERTICAL} to see
    * them whole.
    *
-   * <p>Columns are sized to fit the first {@link #SAMPLE} rows, which are
-   * read before anything is printed. In later rows, a value wider than its
-   * column pushes the rest of its line to the right. */
+   * <p>Rows are read and printed {@link #BATCH} at a time. Each batch is a
+   * table of its own, with its own header, and columns as wide as that
+   * batch needs. */
   TABLE {
     @Override long print(Result result, PrintWriter out, Style style) {
       final List<String> names = result.columnNames();
+      final Iterator<Object[]> rows = result.iterator();
+      final List<Object[]> batch = new ArrayList<>();
+      long count = 0;
+      do {
+        batch.clear();
+        while (batch.size() < BATCH && rows.hasNext()) {
+          batch.add(rows.next());
+        }
+        if (count == 0 || !batch.isEmpty()) {
+          box(names, batch, out, style);
+          out.flush();
+        }
+        count += batch.size();
+      } while (batch.size() == BATCH);
+      return count;
+    }
+
+    private void box(List<String> names, List<Object[]> rows,
+        PrintWriter out, Style style) {
       final int n = names.size();
       final int[] widths = new int[n];
       // A column is right-aligned if it holds numbers and nothing else.
@@ -33,20 +52,12 @@ enum Formatter {
       for (int i = 0; i < n; i++) {
         widths[i] = names.get(i).length();
       }
-      final Iterator<Object[]> rows = result.iterator();
-      final List<Object[]> sample = new ArrayList<>();
-      while (sample.size() < SAMPLE && rows.hasNext()) {
-        final Object[] row = rows.next();
+      for (Object[] row : rows) {
         for (int i = 0; i < n; i++) {
           widths[i] = Math.max(widths[i], cell(row[i]).length());
           numeric[i] |= row[i] instanceof Number;
           text[i] |= row[i] != null && !(row[i] instanceof Number);
         }
-        sample.add(row);
-      }
-      final boolean[] right = new boolean[n];
-      for (int i = 0; i < n; i++) {
-        right[i] = numeric[i] && !text[i];
       }
       rule(out, style, widths, '┌', '┬', '┐');
       final StringBuilder header = new StringBuilder();
@@ -57,32 +68,18 @@ enum Formatter {
       }
       out.println(header.append(style.dim("│")));
       rule(out, style, widths, '├', '┼', '┤');
-      long count = 0;
-      for (Object[] row : sample) {
-        line(row, widths, right, out, style);
-        ++count;
-      }
-      while (rows.hasNext()) {
-        if (count % SAMPLE == 0) {
-          out.flush();
+      for (Object[] row : rows) {
+        final StringBuilder b = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+          final String padded =
+              pad(cell(row[i]), widths[i], numeric[i] && !text[i]);
+          b.append(style.dim("│")).append(' ')
+              .append(row[i] == null ? style.dim(padded) : padded)
+              .append(' ');
         }
-        line(rows.next(), widths, right, out, style);
-        ++count;
+        out.println(b.append(style.dim("│")));
       }
       rule(out, style, widths, '└', '┴', '┘');
-      return count;
-    }
-
-    private void line(Object[] row, int[] widths, boolean[] right,
-        PrintWriter out, Style style) {
-      final StringBuilder b = new StringBuilder();
-      for (int i = 0; i < row.length; i++) {
-        final String padded = pad(cell(row[i]), widths[i], right[i]);
-        b.append(style.dim("│")).append(' ')
-            .append(row[i] == null ? style.dim(padded) : padded)
-            .append(' ');
-      }
-      out.println(b.append(style.dim("│")));
     }
   },
 
@@ -151,8 +148,8 @@ enum Formatter {
   };
 
   private static final int MAX_WIDTH = 60;
-  /** How many rows {@link #TABLE} reads to decide how wide columns are. */
-  static final int SAMPLE = 1000;
+  /** How many rows {@link #TABLE} prints as one table. */
+  static final int BATCH = 1000;
 
   /** Prints a query result, and returns how many rows it had. */
   abstract long print(Result result, PrintWriter out, Style style);

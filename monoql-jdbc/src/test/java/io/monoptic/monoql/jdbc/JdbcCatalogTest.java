@@ -65,7 +65,7 @@ class JdbcCatalogTest {
 
   private List<String> rows(String sql) {
     final List<String> rows = new ArrayList<>();
-    for (Object[] row : session.execute(sql).rows()) {
+    for (Object[] row : session.execute(sql)) {
       rows.add(Arrays.deepToString(row));
     }
     return rows;

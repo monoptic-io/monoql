@@ -13,26 +13,22 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 
 /** The outcome of a statement: either rows, or a count of rows affected.
  *
- * <p>The rows of a query are produced as they are read, not held in memory.
- * Read them once, in order, by iterating; or call {@link #rows()} to load
- * them all. A result holds resources (for a table in another database, a
- * connection) until its last row has been read or it is closed, so use
- * try-with-resources unless you read every row. */
+ * <p>The rows of a query are not held in memory; they are produced as they
+ * are read, once, in order. A result holds resources (for a table in
+ * another database, a connection) until its last row has been read or it is
+ * closed, so use try-with-resources unless you read every row. */
 public final class Result implements Iterable<Object[]>, AutoCloseable {
   private final RelDataType rowType;
   private final long updateCount;
   /** Where rows come from, until they have all been read; then null. */
   private Iterator<Object[]> source;
   private AutoCloseable resource;
-  /** All of the rows, once {@link #rows()} has loaded them. */
-  private List<Object[]> rows;
   private boolean iterating;
 
   private Result(RelDataType rowType, Iterator<Object[]> source,
@@ -56,9 +52,7 @@ public final class Result implements Iterable<Object[]>, AutoCloseable {
 
   /** Creates the result of DML, or of a statement that lowers to DML. */
   public static Result ofCount(long updateCount) {
-    final Result result = new Result(null, null, null, updateCount);
-    result.rows = List.of();
-    return result;
+    return new Result(null, null, null, updateCount);
   }
 
   private static Object external(SqlTypeName type, Object value) {
@@ -99,18 +93,16 @@ public final class Result implements Iterable<Object[]>, AutoCloseable {
     return rowType == null ? List.of() : rowType.getFieldNames();
   }
 
-  /** Returns an iterator over the rows. Unless {@link #rows()} has loaded
-   * them, they can be read only once. */
+  /** Returns an iterator over the rows; there is only one, because rows
+   * can be read only once. Empty unless {@link #isQuery()}. */
   @Override public Iterator<Object[]> iterator() {
-    if (rows != null) {
-      return rows.iterator();
-    }
     if (iterating) {
       throw new IllegalStateException(
           "The rows of this result have already been read");
     }
     iterating = true;
-    final List<RelDataTypeField> fields = rowType.getFieldList();
+    final List<RelDataTypeField> fields =
+        rowType == null ? List.of() : rowType.getFieldList();
     return new Iterator<>() {
       @Override public boolean hasNext() {
         if (source != null && !source.hasNext()) {
@@ -133,19 +125,8 @@ public final class Result implements Iterable<Object[]>, AutoCloseable {
     };
   }
 
-  /** Loads all of the rows into memory and returns them. May be called
-   * repeatedly, but not after iteration has begun. */
-  public List<Object[]> rows() {
-    if (rows == null) {
-      final List<Object[]> list = new ArrayList<>();
-      iterator().forEachRemaining(list::add);
-      rows = list;
-    }
-    return rows;
-  }
-
   /** Releases whatever the result holds; rows not yet read are lost. Does
-   * nothing if the rows have all been read, or loaded by {@link #rows()}. */
+   * nothing if the rows have all been read. */
   @Override public void close() {
     source = null;
     final AutoCloseable r = resource;

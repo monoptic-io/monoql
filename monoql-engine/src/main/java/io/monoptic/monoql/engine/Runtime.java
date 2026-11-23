@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Runs an enumerable plan: compiles it, binds it to a {@link DataContext},
@@ -32,9 +33,13 @@ final class Runtime {
   }
 
   /** Starts a plan and returns a cursor over its rows, each as an array.
-   * The caller closes it. */
+   * The caller closes it.
+   *
+   * @param cancel Set by another thread to stop the plan. The cursor checks
+   *     it before each row, and it is passed to the plan as
+   *     {@link DataContext.Variable#CANCEL_FLAG} for table scans to check */
   static Enumerator<Object[]> open(RelNode physical, SchemaPlus rootSchema,
-      JavaTypeFactory typeFactory) {
+      JavaTypeFactory typeFactory, AtomicBoolean cancel) {
     if (!(physical instanceof EnumerableRel)) {
       throw new IllegalStateException("Plan is not executable: "
           + physical.getConvention());
@@ -44,20 +49,21 @@ final class Runtime {
         EnumerableInterpretable.toBindable(parameters, null,
             (EnumerableRel) physical, EnumerableRel.Prefer.ARRAY);
     final Enumerator<?> enumerator =
-        bindable.bind(new Context(rootSchema, typeFactory, parameters))
+        bindable.bind(
+            new Context(rootSchema, typeFactory, parameters, cancel))
             .enumerator();
-    if (physical.getRowType().getFieldCount() != 1) {
-      @SuppressWarnings("unchecked") final Enumerator<Object[]> rows =
-          (Enumerator<Object[]>) enumerator;
-      return rows;
-    }
     // A plan with a single column yields bare values, not arrays.
+    final boolean scalar = physical.getRowType().getFieldCount() == 1;
     return new Enumerator<>() {
       @Override public Object[] current() {
-        return new Object[] {enumerator.current()};
+        final Object o = enumerator.current();
+        return scalar ? new Object[] {o} : (Object[]) o;
       }
 
       @Override public boolean moveNext() {
+        if (cancel.get()) {
+          throw new CancellationException("Statement cancelled");
+        }
         return enumerator.moveNext();
       }
 
@@ -73,10 +79,10 @@ final class Runtime {
 
   /** Executes a plan and returns all of its rows. */
   static List<Object[]> execute(RelNode physical, SchemaPlus rootSchema,
-      JavaTypeFactory typeFactory) {
+      JavaTypeFactory typeFactory, AtomicBoolean cancel) {
     final List<Object[]> rows = new ArrayList<>();
     try (Enumerator<Object[]> enumerator =
-        open(physical, rootSchema, typeFactory)) {
+        open(physical, rootSchema, typeFactory, cancel)) {
       while (enumerator.moveNext()) {
         rows.add(enumerator.current());
       }
@@ -99,7 +105,7 @@ final class Runtime {
         };
 
     Context(SchemaPlus rootSchema, JavaTypeFactory typeFactory,
-        Map<String, Object> parameters) {
+        Map<String, Object> parameters, AtomicBoolean cancel) {
       this.rootSchema = rootSchema;
       this.typeFactory = typeFactory;
       final long now = System.currentTimeMillis();
@@ -109,7 +115,7 @@ final class Runtime {
       map.put(Variable.LOCAL_TIMESTAMP.camelName, now);
       map.put(Variable.TIME_ZONE.camelName, TimeZone.getTimeZone("UTC"));
       map.put(Variable.LOCALE.camelName, Locale.ROOT);
-      map.put(Variable.CANCEL_FLAG.camelName, new AtomicBoolean());
+      map.put(Variable.CANCEL_FLAG.camelName, cancel);
       map.put(Variable.USER.camelName, System.getProperty("user.name"));
       map.put(Variable.SYSTEM_USER.camelName,
           System.getProperty("user.name"));

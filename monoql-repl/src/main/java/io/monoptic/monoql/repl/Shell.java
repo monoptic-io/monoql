@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
+import java.util.concurrent.CancellationException;
 
 /** The shell, minus the terminal: takes one input at a time (a
  * {@code !command}, or SQL), runs it against a {@link Session}, and prints
@@ -104,6 +105,12 @@ final class Shell {
     this.timing = timing;
   }
 
+  /** Stops the statement that is running, if any. For a signal handler:
+   * this may be called from any thread. */
+  void cancel() {
+    session.cancel();
+  }
+
   /** Whether any input since the shell started has failed. */
   boolean failed() {
     return failed;
@@ -134,6 +141,9 @@ final class Shell {
         return command(trimmed.substring(1));
       }
       sql(trimmed);
+    } catch (CancellationException e) {
+      failed = true;
+      out.println(style.red("Cancelled"));
     } catch (RuntimeException | StackOverflowError e) {
       error(e);
     } finally {

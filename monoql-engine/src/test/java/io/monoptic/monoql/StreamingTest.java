@@ -21,8 +21,8 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.junit.jupiter.api.Test;
 
 import java.util.Iterator;
-import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 
 import static io.monoptic.monoql.Sessions.run;
 
@@ -96,7 +96,6 @@ class StreamingTest {
         assertEquals(1, endless.open);
         // The rows can be read once.
         assertThrows(IllegalStateException.class, result::iterator);
-        assertThrows(IllegalStateException.class, result::rows);
       }
       // Closing the result closed the scan.
       assertEquals(0, endless.open);
@@ -115,33 +114,50 @@ class StreamingTest {
     }
   }
 
-  @Test void rowsCanBeLoaded() {
-    try (Session session = Monoql.builder().build()) {
-      run(session, "create table t (id int)", "insert into t values (1), (2)");
-      final Result result = session.execute("select id from t order by id");
-      assertEquals(2, result.rows().size());
-      // Once loaded, they can be read as often as you like.
-      assertEquals(2, result.rows().size());
-      int count = 0;
-      for (Object[] row : result) {
-        assertArrayEquals(new Object[] {++count}, row);
-      }
-      assertEquals(2, count);
+  @Test void scriptsCloseTheirResults() {
+    try (Session session = session()) {
+      // A sink that does not read the rows does not leave the scan open.
+      session.executeScript("select n from endless; select n from endless",
+          result -> assertTrue(result.isQuery()));
+      assertEquals(0, endless.open);
     }
   }
 
-  @Test void scriptsLoadOrClose() {
+  /** A statement can be stopped from another thread, whether it is handing
+   * back rows or still working towards its first. */
+  @Test void cancel() throws Exception {
     try (Session session = session()) {
-      final List<Result> results =
-          session.executeScript("select n from endless limit 2; show tables");
-      assertEquals(2, results.get(0).rows().size());
-      assertEquals(1, results.get(1).rows().size());
+      final Result result = session.execute("select n from endless");
+      final Iterator<Object[]> rows = result.iterator();
+      rows.next();
+      session.cancel();
+      assertThrows(CancellationException.class, rows::hasNext);
+      result.close();
       assertEquals(0, endless.open);
 
-      // A sink that does not read the rows does not leave the scan open.
-      session.executeScript("select n from endless",
-          result -> assertTrue(result.isQuery()));
-      assertEquals(0, endless.open);
+      // The next statement is unaffected.
+      run(session, "create table t (id int)",
+          "insert into t values (1), (2), (3), (4), (5), (6), (7), (8)");
+      // 8 rows, then 72, then 5,256.
+      run(session, "insert into t select a.id from t a, t b",
+          "insert into t select a.id from t a, t b");
+      // A hundred billion rows to count, none of which reach the cursor.
+      final Thread canceller = new Thread(() -> {
+        try {
+          Thread.sleep(300);
+        } catch (InterruptedException e) {
+          return;
+        }
+        session.cancel();
+      });
+      canceller.start();
+      assertThrows(CancellationException.class, () -> {
+        try (Result count =
+            session.execute("select count(*) from t a, t b, t c")) {
+          count.iterator().next();
+        }
+      });
+      canceller.join();
     }
   }
 
@@ -150,7 +166,6 @@ class StreamingTest {
       final Result result = session.execute("create table t (id int)");
       assertFalse(result.isQuery());
       assertFalse(result.iterator().hasNext());
-      assertEquals(List.of(), result.rows());
     }
   }
 }
