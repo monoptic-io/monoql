@@ -165,8 +165,8 @@ REFRESH MATERIALIZED VIEW totals;          -- runs the query again
   copy rows from one catalog to another.
 - `REFRESH` is a `DELETE` of the rows and an `INSERT` of the query's, as
   `!lower` shows; there is no incremental refresh. They are one statement,
-  so in a catalog that makes statements atomic, as the in-memory catalog
-  does for rows, a reader sees the old rows or the new, and if the query
+  so in a catalog that makes statements atomic (the in-memory catalog
+  does for rows; `jdbc` does with a transaction), a reader sees the old rows or the new, and if the query
   fails the old rows stay. Run by hand, they are two statements.
 - The rows of a materialized view are its owner's to write, with ordinary
   DML; that is all a refresh is. Refreshing therefore takes ownership of the

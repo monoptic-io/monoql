@@ -20,6 +20,7 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /** A catalog whose metadata is durable: every metadata table, with the
  * rules of {@link StandardCatalog}, kept in a SQL database.
@@ -101,6 +102,15 @@ public final class MetastoreCatalog extends StandardCatalog {
     } else if (!shape(before).equals(shape(after))) {
       data.tables().update(shape(before), shape(after));
     }
+  }
+
+  /** The data catalog's unit is inside the metastore's: what a statement
+   * does to rows is undone with what it does to metadata, if the data
+   * catalog can undo. It ends first, so if the metastore then cannot
+   * commit, the rows stay as the statement left them. */
+  @Override public <T> T atomically(Supplier<T> work) {
+    return data == null ? super.atomically(work)
+        : super.atomically(() -> data.atomically(work));
   }
 
   @Override public Optional<Table> bind(TableInfo table) {
