@@ -8,6 +8,7 @@ import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Column;
+import io.monoptic.monoql.catalog.MaterializedViewInfo;
 import io.monoptic.monoql.catalog.SchemaInfo;
 import io.monoptic.monoql.catalog.TableInfo;
 import io.monoptic.monoql.catalog.standard.StandardCatalog;
@@ -29,7 +30,9 @@ import java.util.Optional;
  * <p>The metadata says what tables there are. Their rows are somewhere
  * else: in a <em>data catalog</em>, of any type, which is told to create,
  * alter and drop each table as this catalog is, and asked for its rows.
- * Without one, tables are metadata only.
+ * It holds the rows of materialized views in the same way. Without one,
+ * tables are metadata only, and materialized views read as their
+ * definitions.
  *
  * <p>A statement's changes to the metadata happen entirely or not at all
  * ({@link #atomically}). The data catalog is not part of that: its changes
@@ -102,6 +105,57 @@ public final class MetastoreCatalog extends StandardCatalog {
 
   @Override public Optional<Table> bind(TableInfo table) {
     return data == null ? Optional.empty() : data.bind(table);
+  }
+
+  /** The table in the data catalog that holds a materialized view's rows:
+   * of the view's name, in the view's schema. */
+  private static TableInfo storage(MaterializedViewInfo view,
+      List<Column> columns) {
+    return shape(
+        new TableInfo(view.schemaName(), view.viewName(), columns, List.of(),
+            List.of(), null, Map.of()));
+  }
+
+  /** The rows of a materialized view are in the data catalog too, in a
+   * table made the first time they are wanted, which is as the view is
+   * created. It keeps the shape it was made with; see
+   * {@link #materializedViewChanged}. */
+  @Override public Optional<Table> bind(MaterializedViewInfo view,
+      List<Column> columns) {
+    if (data == null) {
+      return Optional.empty();
+    }
+    final TableInfo wanted = storage(view, columns);
+    final Optional<TableInfo> existing = data.tables().get(wanted.key());
+    if (existing.isEmpty()) {
+      data.tables().insert(wanted);
+    }
+    return data.bind(existing.orElse(wanted));
+  }
+
+  /** The table that holds a view's rows goes when the view does, or when
+   * it is given another query, since the rows are that query's no longer;
+   * and follows a rename. */
+  @Override protected void materializedViewChanged(
+      MaterializedViewInfo before, MaterializedViewInfo after) {
+    if (data == null || before == null) {
+      return;
+    }
+    final Optional<TableInfo> existing = data.tables().get(before.key());
+    if (existing.isEmpty()) {
+      return;
+    }
+    final TableInfo table = existing.get();
+    if (after == null
+        || !after.definition().equals(before.definition())
+        || !after.columnNames().equals(before.columnNames())) {
+      data.tables().delete(table);
+    } else if (!after.key().equals(before.key())) {
+      data.tables().update(table,
+          new TableInfo(after.schemaName(), after.viewName(), table.columns(),
+              table.primaryKey(), table.partitionKeys(), table.comment(),
+              table.options()));
+    }
   }
 
   @Override public void close() {

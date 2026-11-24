@@ -428,6 +428,53 @@ class MetastoreTest {
     }
   }
 
+  /** The rows of a materialized view are in the data catalog, in a table
+   * of its name. */
+  @Test void materializedRows() throws Exception {
+    final String data = "jdbc:hsqldb:mem:" + run + "mv";
+    final String[] options = {"data.type", "jdbc", "data.url", data};
+    final Session s = session("acme", options);
+    run(s, "create schema s", "use s",
+        "create table orders (id int not null, region varchar(10),"
+            + " amount int)",
+        "insert into orders values (1, 'east', 10), (2, 'east', 5),"
+            + " (3, 'west', 7)",
+        "create materialized view totals as select region,"
+            + " sum(amount) as total from orders group by region");
+    assertEquals(List.of("[east, 15]", "[west, 7]"),
+        rows(s, "select * from totals order by region"));
+    assertEquals(2, count(data, "s.totals"));
+
+    // Stale until refreshed; and another server reads the same rows.
+    run(s, "insert into orders values (4, 'west', 100)");
+    final Session again = session("acme", options);
+    assertEquals(List.of("[east, 15]", "[west, 7]"),
+        rows(again, "select * from s.totals order by region"));
+    run(again, "refresh materialized view s.totals");
+    assertEquals(List.of("[east, 15]", "[west, 107]"),
+        rows(s, "select * from totals order by region"));
+
+    // Another query is other rows, of another shape.
+    run(s, "create or replace materialized view totals as"
+        + " select count(*) as orders from orders");
+    assertEquals(List.of("[4]"), rows(again, "select * from s.totals"));
+    assertEquals(1, count(data, "s.totals"));
+
+    run(s, "drop materialized view totals");
+    assertThrows(java.sql.SQLException.class, () -> count(data, "s.totals"));
+    run(s, "drop table orders", "drop schema s");
+  }
+
+  private static int count(String url, String table) throws Exception {
+    try (Connection c = DriverManager.getConnection(url);
+        Statement statement = c.createStatement();
+        java.sql.ResultSet r =
+            statement.executeQuery("select count(*) from " + table)) {
+      assertTrue(r.next());
+      return r.getInt(1);
+    }
+  }
+
   @Test void options() {
     final MetastoreCatalogProvider provider = new MetastoreCatalogProvider();
     assertThrows(CatalogException.class,
