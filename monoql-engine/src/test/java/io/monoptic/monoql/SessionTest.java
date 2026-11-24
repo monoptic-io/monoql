@@ -324,6 +324,21 @@ class SessionTest {
     run(session, (String) statement);
     assertEquals(List.of("[2]"), rows(session, "select * from live"));
 
+    // Pausing the view holds its job, and resuming lets it go; another
+    // job of the same name is not the view's, and is left alone.
+    run(session, "insert into metadata.jobs (schema_name, job_name,"
+        + " submitted_at, statement) values ('MAIN', 'LIVE',"
+        + " current_timestamp, 'select 0')");
+    final String paused = "select paused from metadata.jobs"
+        + " order by statement";
+    run(session, "pause materialized view live");
+    assertEquals(List.of("[true]", "[false]"), rows(session, paused));
+    assertEquals(List.of("[true]"),
+        rows(session, "select paused from metadata.materialized_views"));
+    run(session, "resume materialized view live");
+    assertEquals(List.of("[false]", "[false]"), rows(session, paused));
+    run(session, "delete from metadata.jobs where statement = 'select 0'");
+
     // It is not also refreshed by hand.
     final UnsupportedException e =
         assertThrows(UnsupportedException.class,

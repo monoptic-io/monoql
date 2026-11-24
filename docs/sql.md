@@ -143,7 +143,7 @@ REFRESH MATERIALIZED VIEW name
 | `CREATE MATERIALIZED VIEW ... SCHEDULE` | the same, then `INSERT INTO METADATA.TRIGGERS` |
 | `CREATE MATERIALIZED VIEW ... REFRESH CONTINUOUSLY` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO METADATA.JOBS`, of that `INSERT INTO` the view |
 | `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS`; before it, `DELETE FROM METADATA.TRIGGERS` if the view has a schedule, and `DELETE FROM METADATA.JOBS` if it is continuous |
-| `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED`; and `UPDATE METADATA.TRIGGERS SET PAUSED` if the view has a schedule |
+| `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED`; and `UPDATE METADATA.TRIGGERS SET PAUSED` if the view has a schedule, or `UPDATE METADATA.JOBS SET PAUSED` if it is continuous |
 | `REFRESH` | `DELETE FROM` the view, then `INSERT INTO` it, of its query |
 
 The query is validated when the view is created, and stored with every name
@@ -198,7 +198,8 @@ CREATE MATERIALIZED VIEW clicks_by_page REFRESH CONTINUOUSLY AS
   query, that would have filled it once is submitted as a [job](#jobs) of
   the view's name, for whatever runs the catalog's jobs to run and never
   finish. What "continuously" amounts to is up to that.
-- The job is cancelled when the view is dropped or replaced.
+- The job is cancelled when the view is dropped or replaced, and held
+  (`PAUSED`) while the view is paused.
 - `REFRESH MATERIALIZED VIEW` on such a view is an error.
 - It needs a catalog with a `JOBS` table. In the in-memory catalog nothing
   runs jobs, so the view stays empty.
@@ -281,6 +282,9 @@ DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
   once. Whatever runs a catalog's jobs can read
   `SELECT statement FROM metadata.jobs WHERE continuous` and run them all
   as one pipeline, if it likes.
+- `PAUSED` asks whatever runs the job to hold it: not to start it, or to
+  stop it until it is resumed. It is what whoever submitted the job wants,
+  as `STATE` is what has happened.
 - `SUBMITTED_BY` is who submitted the job, and so whom to run it as. The
   statements that submit jobs fill it in with `CURRENT_USER`. A session
   that acts as someone may submit a job, or change what one does, only in

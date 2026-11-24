@@ -118,7 +118,7 @@ with equal keys are the same object.
 | `PARTITIONS` | `PartitionInfo(schemaName, tableName, spec, options)` | schema, table, spec |
 | `FUNCTIONS` | `FunctionInfo(schemaName, functionName, functionLanguage, definition, comment, options)` | schema, function |
 | `TRIGGERS` | `TriggerInfo(schemaName, triggerName, tableSchema, tableName, timing, events, schedule, action, paused, comment, options)` | schema, trigger |
-| `JOBS` | `Job(schemaName, jobName, submittedAt, submittedBy, statement, continuous, options, state, startedAt, finishedAt, error)` | schema, job, time |
+| `JOBS` | `Job(schemaName, jobName, submittedAt, submittedBy, statement, continuous, paused, options, state, startedAt, finishedAt, error)` | schema, job, time |
 | `ROLES` | `RoleInfo(roleName, comment, options)` | role |
 | `USERS` | `UserInfo(userName, comment, options)` | user |
 | `GRANTS` | `Grant(privilege, objectType, objectSchema, objectName, granteeType, grantee, grantable)` | all but `grantable` |

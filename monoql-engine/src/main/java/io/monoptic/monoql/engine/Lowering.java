@@ -555,17 +555,19 @@ final class Lowering {
         .map(MaterializedViewInfo::continuous).orElse(false)) {
       return List.of();
     }
+    return List.of(new Step(delete("JOBS", jobOf(name)), false, null));
+  }
+
+  /** The condition that picks out the job that keeps a materialized view
+   * up to date: the jobs of its name that insert into it. */
+  private static String jobOf(Name name) {
     final String prefix =
         "INSERT INTO " + SqlText.path(name.catalog, name.schema, name.name);
-    return List.of(
-        new Step(
-            delete("JOBS",
-                SqlText.eq(CATALOG_NAME, name.catalog) + " AND "
-                    + SqlText.eq("SCHEMA_NAME", name.schema) + " AND "
-                    + SqlText.eq("JOB_NAME", name.name) + "\n  AND SUBSTRING("
-                    + SqlText.id("STATEMENT") + ", 1, " + prefix.length()
-                    + ") = " + SqlText.str(prefix)),
-            false, null));
+    return SqlText.eq(CATALOG_NAME, name.catalog) + " AND "
+        + SqlText.eq("SCHEMA_NAME", name.schema) + " AND "
+        + SqlText.eq("JOB_NAME", name.name) + "\n  AND SUBSTRING("
+        + SqlText.id("STATEMENT") + ", 1, " + prefix.length()
+        + ") = " + SqlText.str(prefix);
   }
 
   /** The step that removes the rows of a materialized view. */
@@ -819,14 +821,21 @@ final class Lowering {
           targeted(name.catalog, home(n.kind).table,
               update(home(n.kind).table, paused, where(n.kind, name)),
               notFound(n.kind, name));
-      if (n.kind != ObjectKind.MATERIALIZED_VIEW || !scheduled(name)) {
+      if (n.kind != ObjectKind.MATERIALIZED_VIEW) {
         return pause;
       }
-      // And its schedule with it.
-      final List<Step> both = new ArrayList<>(pause.steps());
-      both.add(
-          new Step(update("TRIGGERS", paused, triggerOf(name)), false, null));
-      return new Lowered(both);
+      // And what keeps it up to date with it: its schedule, or its job.
+      final List<Step> all = new ArrayList<>(pause.steps());
+      if (scheduled(name)) {
+        all.add(
+            new Step(update("TRIGGERS", paused, triggerOf(name)), false,
+                null));
+      }
+      if (find(name, Catalog::materializedViews)
+          .map(MaterializedViewInfo::continuous).orElse(false)) {
+        all.add(new Step(update("JOBS", paused, jobOf(name)), false, null));
+      }
+      return new Lowered(all);
     case FIRE:
       // A job, for whatever runs the catalog's jobs: the trigger's action,
       // under the trigger's name.
