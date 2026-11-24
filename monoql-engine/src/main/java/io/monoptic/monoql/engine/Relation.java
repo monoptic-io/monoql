@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /** One table of the {@code METADATA} schema, in terms of {@code Object[]}
  * rows: the bridge between SQL and the typed {@link MetaTable}s of the
@@ -149,29 +150,34 @@ final class Relation<R extends MetaRow> {
     return o == null ? null : o.toString();
   }
 
+  /** Returns a row as a function from column name to value; null for a
+   * column this relation does not have. */
+  private UnaryOperator<String> values(Object[] row) {
+    return column -> codec.columnNames().contains(column)
+        ? value(row, column) : null;
+  }
+
   /** Checks that the user of the session may write a row. */
-  void authorize(Authorizer authorizer, Object[] row) {
-    if (!authorizer.enabled()) {
-      return;
-    }
+  private void authorize(Authorizer authorizer, Authorizer.Op op,
+      Object[] row) {
     if (sessionTable != null) {
       // Anyone may change their own settings.
-      if (name.equals(CatalogRegistry.NAME)) {
+      if (authorizer.enabled() && name.equals(CatalogRegistry.NAME)) {
         authorizer.checkCatalogs();
       }
-      return;
+    } else if (authorizer.enabled()) {
+      authorizer.checkWrite(name, op, catalogName(row), values(row));
     }
-    final String catalogName = catalogName(row);
-    if (name.equals(MetaTables.GRANTS.name())) {
-      authorizer.checkGrant(catalogName, value(row, "PRIVILEGE"),
-          value(row, "OBJECT_TYPE"), value(row, "OBJECT_SCHEMA"),
-          value(row, "OBJECT_NAME"));
-    } else {
-      // Creating or dropping a schema is a change to the catalog.
-      final boolean inSchema = !name.equals(MetaTables.SCHEMAS.name())
-          && codec.columnNames().contains("SCHEMA_NAME");
-      authorizer.checkMetadata(name, catalogName,
-          inSchema ? value(row, "SCHEMA_NAME") : null);
+  }
+
+  /** Tells the authorizer that a row has been written, so that it can keep
+   * the grants in step. */
+  private void written(Authorizer authorizer, Object[] before,
+      Object[] after) {
+    if (sessionTable == null) {
+      authorizer.written(name, catalogName(before != null ? before : after),
+          before == null ? null : values(before),
+          after == null ? null : values(after));
     }
   }
 
@@ -197,34 +203,48 @@ final class Relation<R extends MetaRow> {
     }
   }
 
-  void insert(Object[] row) {
+  void insert(Authorizer authorizer, Object[] row) {
+    authorize(authorizer, Authorizer.Op.INSERT, row);
     target(row).insert(decode(row));
+    written(authorizer, null, row);
   }
 
   /** Inserts a row, or replaces the row with the same key. */
-  void upsert(Object[] row) {
+  void upsert(Authorizer authorizer, Object[] row) {
     final MetaTable<R> table = target(row);
     final R after = decode(row);
     final Optional<R> before = table.get(after.key());
     if (before.isPresent()) {
+      authorize(authorizer, Authorizer.Op.UPDATE, row);
       table.update(before.get(), after);
     } else {
+      authorize(authorizer, Authorizer.Op.INSERT, row);
       table.insert(after);
+      written(authorizer, null, row);
     }
   }
 
-  void update(Object[] before, Object[] after) {
+  void update(Authorizer authorizer, Object[] before, Object[] after) {
     final MetaTable<R> table = target(before);
     if (sessionTable == null
         && after[0] != null && !after[0].equals(before[0])) {
       throw new CatalogException(
           "Cannot move a row of " + name + " to another catalog");
     }
-    table.update(decode(before), decode(after));
+    final R old = decode(before);
+    final R updated = decode(after);
+    authorize(authorizer, Authorizer.Op.UPDATE, before);
+    if (!old.key().equals(updated.key())) {
+      // A rename, perhaps into another schema: the row arrives somewhere.
+      authorize(authorizer, Authorizer.Op.INSERT, after);
+    }
+    table.update(old, updated);
+    written(authorizer, before, after);
   }
 
-  void delete(Object[] row) {
+  void delete(Authorizer authorizer, Object[] row) {
+    authorize(authorizer, Authorizer.Op.DELETE, row);
     target(row).delete(decode(row));
+    written(authorizer, row, null);
   }
-
 }

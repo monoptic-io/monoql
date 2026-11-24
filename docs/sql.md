@@ -247,31 +247,45 @@ changed.
 |---|---|
 | Read a table, view or materialized view | `SELECT` on it |
 | `INSERT`, `UPDATE`, `DELETE` rows of a table | that privilege on it |
-| Run DDL, DCL or a control statement, or the DML it stands for | `ALL PRIVILEGES` on the schema the object is in, or on the catalog |
-| `CREATE SCHEMA`, `DROP SCHEMA`, and anything about roles and users | `ALL PRIVILEGES` on the catalog |
-| `GRANT` or `REVOKE` a privilege on an object | as for DDL; or that privilege on that object `WITH GRANT OPTION` |
+| Create a table, view, materialized view, function or trigger | `CREATE TABLE`, `CREATE VIEW`, `CREATE MATERIALIZED VIEW`, `CREATE FUNCTION` or `CREATE TRIGGER` on the schema |
+| Create a schema | `CREATE SCHEMA` on the catalog |
+| Alter, comment on, pause, resume, fire, refresh, replace or drop something | `OWNERSHIP` of it |
+| `GRANT` or `REVOKE` a privilege on something | `OWNERSHIP` of it; or that privilege on it `WITH GRANT OPTION` |
+| Anything about roles and users | `OWNERSHIP` of the catalog |
 | `CREATE CATALOG`, `DROP CATALOG` | a session with no user |
 | Read the `METADATA` schema (`SHOW`, `DESCRIBE`); `USE`; `SET` | nothing |
 
+- **Whoever creates something owns it.** Creating an object as a user adds
+  a row to `METADATA.GRANTS`: `OWNERSHIP` of it, to that user, grantable.
+  Ownership can be granted to others, and revoked, like any privilege.
+  What a session with no user creates has no owner, until one is granted.
+- `OWNERSHIP` of something includes every privilege on it. `ALL PRIVILEGES`
+  on a schema or a catalog amounts to owning it; on a single object it is
+  every privilege *except* ownership, so it does not allow dropping it.
+- A grant on a schema or a catalog covers everything in it. So the owner
+  of a schema can do anything to anything in it, and a user with
+  `CREATE TABLE` on a catalog can create tables in any of its schemas.
+- **Grants belong to an object, not to its name.** Dropping something
+  deletes the grants on it, and renaming it moves them, whoever does it.
+  Moving a table to another schema takes `CREATE TABLE` there.
 - A grant applies to a user if its grantee is that user, or a role the user
   holds directly or through other roles (`GRANT ROLE`). A grantee recorded
   without a kind matches either. Names are compared exactly, and an unquoted
   name in a statement is stored in upper case.
-- A grant on a schema or a catalog covers everything in it. `ALL PRIVILEGES`
-  covers every privilege.
 - A view is read with its definer's rights: `SELECT` on the view is enough,
   whatever it reads. To define one, you need `SELECT` on what it reads.
 - Because a statement *is* its DML, `DROP TABLE t` and
   `DELETE FROM METADATA.TABLES WHERE ...` are checked by the same rule, on
-  the rows they change.
+  the rows they change; and `INSERT INTO METADATA.TABLES` makes you the
+  owner just as `CREATE TABLE` does.
 - A catalog is checked only if it has a `GRANTS` table that can be read. One
   that does not (the `jdbc` catalog, for example) is left to its backend.
 
-Not there yet: privileges finer than `ALL PRIVILEGES` for DDL (`CREATE
-TABLE` on a schema, say); ownership; `EXECUTE` on functions; `GROUP`
-grantees, which match nobody because monoql has no source of group
-membership; and restricting who can read metadata, which includes view
-definitions and the grants themselves.
+Not there yet: separate privileges for the different ways of changing an
+object (they all take ownership); `EXECUTE` on functions; `GROUP` grantees,
+which match nobody because monoql has no source of group membership; and
+restricting who can read metadata, which includes view definitions and the
+grants themselves.
 
 ## SHOW and DESCRIBE
 
