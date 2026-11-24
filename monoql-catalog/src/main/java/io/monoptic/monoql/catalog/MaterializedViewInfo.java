@@ -13,16 +13,15 @@ import java.util.Map;
  * @param viewName Name
  * @param columnNames Column aliases, or empty to use the query's
  * @param definition The query
- * @param schedule Refresh schedule (typically a cron expression), or null
  * @param continuous Whether its rows are kept up to date all the time, by
  *     a job that never ends, rather than refreshed now and then
- * @param paused Whether refreshes are paused
+ * @param paused Whether keeping it up to date is paused: its schedule,
+ *     or its job
  * @param comment Comment, or null
  * @param options Options */
 public record MaterializedViewInfo(String schemaName, String viewName,
-    List<String> columnNames, String definition, String schedule,
-    boolean continuous, boolean paused, String comment,
-    Map<String, String> options)
+    List<String> columnNames, String definition, boolean continuous,
+    boolean paused, String comment, Map<String, String> options)
     implements MetaRow {
   public MaterializedViewInfo {
     Rows.required(schemaName, "schemaName");

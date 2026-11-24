@@ -461,7 +461,6 @@ final class Lowering {
             "COLUMN_NAMES", SqlText.array(columnNames),
             "DEFINITION", SqlText.str(query.sql));
     if (n.materialized) {
-      row.put("SCHEDULE", SqlText.str(n.schedule));
       row.put("CONTINUOUS", SqlText.bool(n.continuous));
       row.put("PAUSED", SqlText.bool(false));
     }
@@ -475,8 +474,9 @@ final class Lowering {
     final List<Step> steps =
         new ArrayList<>(create(n, "MATERIALIZED_VIEWS", row).steps());
     if (n.getReplace()) {
-      // The view it replaces may have left rows behind, and a job that is
-      // still adding to them.
+      // The view it replaces may have left rows behind, a job that is
+      // still adding to them, and a schedule.
+      steps.addAll(unschedule(name));
       steps.addAll(stop(name));
       steps.add(empty(name));
     }
@@ -497,7 +497,52 @@ final class Lowering {
     } else {
       steps.add(fill);
     }
+    if (n.schedule != null) {
+      // A schedule is a trigger: of the view's name, whose action is to
+      // refresh the view.
+      steps.add(
+          new Step(
+              insert(false, "TRIGGERS",
+                  List.of(
+                      row(CATALOG_NAME, SqlText.str(name.catalog),
+                          "SCHEMA_NAME", SqlText.str(name.schema),
+                          "TRIGGER_NAME", SqlText.str(name.name),
+                          "SCHEDULE", SqlText.str(n.schedule),
+                          "ACTION", SqlText.str(refresh(name)),
+                          "PAUSED", SqlText.bool(false)))),
+              false, null));
+    }
     return new Lowered(steps);
+  }
+
+  /** What the trigger that refreshes a view on a schedule does. */
+  private static String refresh(Name name) {
+    return "REFRESH MATERIALIZED VIEW "
+        + SqlText.path(name.catalog, name.schema, name.name);
+  }
+
+  /** Whether a materialized view has such a trigger: one of its name,
+   * that does that. */
+  private boolean scheduled(Name name) {
+    try {
+      return find(name, Catalog::triggers)
+          .map(t -> t.action().equals(refresh(name))).orElse(false);
+    } catch (UnsupportedException e) {
+      return false;
+    }
+  }
+
+  private static String triggerOf(Name name) {
+    return where(ObjectKind.TRIGGER, name) + " AND "
+        + SqlText.eq("ACTION", refresh(name));
+  }
+
+  /** The steps that remove the schedule of a materialized view, if it has
+   * one. */
+  private List<Step> unschedule(Name name) {
+    return scheduled(name)
+        ? List.of(new Step(delete("TRIGGERS", triggerOf(name)), false, null))
+        : List.of();
   }
 
   /** The steps that cancel the job that keeps a materialized view up to
@@ -601,8 +646,10 @@ final class Lowering {
     if (n.kind != ObjectKind.MATERIALIZED_VIEW) {
       return drop;
     }
-    // Its job goes first, while the view still says it has one.
-    final List<Step> steps = new ArrayList<>(stop(name));
+    // Its schedule and its job go first, while the view still says it
+    // has a job.
+    final List<Step> steps = new ArrayList<>(unschedule(name));
+    steps.addAll(stop(name));
     steps.addAll(drop.steps());
     return new Lowered(steps);
   }
@@ -763,12 +810,21 @@ final class Lowering {
     switch (n.verb) {
     case PAUSE:
     case RESUME:
-      return targeted(name.catalog, home(n.kind).table,
-          update(home(n.kind).table,
-              SqlText.id("PAUSED") + " = "
-                  + SqlText.bool(n.verb == SqlControl.Verb.PAUSE),
-              where(n.kind, name)),
-          notFound(n.kind, name));
+      final String paused =
+          SqlText.id("PAUSED") + " = "
+              + SqlText.bool(n.verb == SqlControl.Verb.PAUSE);
+      final Lowered pause =
+          targeted(name.catalog, home(n.kind).table,
+              update(home(n.kind).table, paused, where(n.kind, name)),
+              notFound(n.kind, name));
+      if (n.kind != ObjectKind.MATERIALIZED_VIEW || !scheduled(name)) {
+        return pause;
+      }
+      // And its schedule with it.
+      final List<Step> both = new ArrayList<>(pause.steps());
+      both.add(
+          new Step(update("TRIGGERS", paused, triggerOf(name)), false, null));
+      return new Lowered(both);
     case FIRE:
       // A job, for whatever runs the catalog's jobs: the trigger's action,
       // under the trigger's name.
@@ -1022,7 +1078,7 @@ final class Lowering {
     case MATERIALIZED_VIEWS:
       catalog = showSchema(n).catalog;
       sql = showInSchema(n, "VIEW_NAME",
-          cols("VIEW_NAME", "SCHEDULE", "PAUSED", "COMMENT"));
+          cols("VIEW_NAME", "CONTINUOUS", "PAUSED", "COMMENT"));
       break;
     case FUNCTIONS:
       catalog = showSchema(n).catalog;

@@ -205,12 +205,44 @@ class SessionTest {
         "create materialized view mv schedule '@daily' as "
             + "select count(*) as c from t");
     assertEquals(List.of("[2]"), rows(session, "select * from mv"));
-    assertEquals(List.of("[MV, @daily, false, null]"),
+    assertEquals(List.of("[MV, false, false, null]"),
         rows(session, "show materialized views"));
+    // Its schedule is a trigger, of its name, that refreshes it.
+    final String schedule = "select trigger_name, schedule, action, paused"
+        + " from metadata.triggers";
+    assertEquals(
+        List.of("[MV, @daily, REFRESH MATERIALIZED VIEW"
+            + " \"MEMORY\".\"MAIN\".\"MV\", false]"),
+        rows(session, schedule));
+    // Which is paused with it,
     run(session, "pause materialized view mv",
         "refresh materialized view mv");
-    assertEquals(List.of("[MV, @daily, true, null]"),
+    assertEquals(List.of("[MV, false, true, null]"),
         rows(session, "show materialized views"));
+    assertTrue(rows(session, schedule).get(0).endsWith("true]"));
+    // fired like any other, which asks for a refresh,
+    run(session, "resume materialized view mv", "fire trigger mv");
+    assertEquals(
+        List.of("[MV, REFRESH MATERIALIZED VIEW"
+            + " \"MEMORY\".\"MAIN\".\"MV\"]"),
+        rows(session, "select job_name, statement from metadata.jobs"));
+    // replaced with it,
+    run(session, "create or replace materialized view mv schedule '@hourly'"
+        + " as select count(*) as c from t");
+    assertTrue(rows(session, schedule).get(0).startsWith("[MV, @hourly,"));
+    run(session, "create or replace materialized view mv"
+        + " as select count(*) as c from t");
+    assertEquals(List.of(), rows(session, schedule));
+    // and dropped with it; though not a trigger that merely shares its
+    // name.
+    run(session, "create or replace materialized view mv schedule '@daily'"
+            + " as select count(*) as c from t",
+        "create materialized view other as select 1 as c",
+        "create trigger other schedule '@daily' as 'something else'",
+        "drop materialized view mv", "drop materialized view other");
+    assertEquals(List.of("[OTHER, @daily, something else, false]"),
+        rows(session, schedule));
+    run(session, "create materialized view mv as select count(*) as c from t");
     assertThrows(NotFoundException.class,
         () -> session.execute("refresh materialized view nosuch"));
   }
