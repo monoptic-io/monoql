@@ -25,8 +25,9 @@ public final class Session implements AutoCloseable {
   private final Engine engine;
 
   Session(Monoql.Builder builder) {
-    this.engine = new Engine(builder.frameworkConfig(), builder.providers,
-            builder.user);
+    this.engine =
+        new Engine(builder.frameworkConfig(), builder.providers,
+            builder.identity);
     String catalog = builder.defaultCatalog;
     String schema = builder.defaultSchema;
     if (builder.catalogs.isEmpty()) {
@@ -46,6 +47,30 @@ public final class Session implements AutoCloseable {
       }
     }
     engine.use(catalog, schema);
+  }
+
+  private Session(Engine engine) {
+    this.engine = engine;
+  }
+
+  /** Returns a session over the same catalogs, acting as someone else, and
+   * starting in the same catalog and schema. Each session has its own
+   * current catalog and schema; catalogs mounted or dropped through one
+   * are seen by the other. Closing the new session leaves the catalogs
+   * open; closing this one closes them.
+   *
+   * <p>This is how one application serves many users from one set of
+   * catalogs. Any session can do it, whoever it acts as: whoever holds a
+   * session is already trusted to say who it speaks for.
+   *
+   * @param identity Who to act as; null for nobody, which is unchecked */
+  public Session as(Identity identity) {
+    return new Session(engine.as(identity));
+  }
+
+  /** Who this session acts as; null if nobody. */
+  public Identity identity() {
+    return engine.identity();
   }
 
   /** Executes one statement. The rows of a query are read as the result

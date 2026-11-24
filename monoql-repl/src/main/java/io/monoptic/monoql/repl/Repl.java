@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.repl;
 
+import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.Monoql;
 import io.monoptic.monoql.Session;
 
@@ -31,7 +32,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** The monoql shell.
  *
@@ -54,6 +57,9 @@ public final class Repl {
       "                        (default: ~/.monoql/init.sql, if it exists)",
       "  -j, --jar PATH        Add a jar to the class path: a JDBC driver for a",
       "                        jdbc catalog, or a catalog provider; repeatable",
+      "  -u, --user NAME       Act as this user, subject to grants, once the",
+      "                        init script has run; see !as",
+      "  -g, --group NAME      A group the user is in; repeatable",
       "      --format FORMAT   table (default), vertical, csv or json",
       "      --no-color        Plain output",
       "      --no-timing       Do not print how long statements take",
@@ -71,6 +77,8 @@ public final class Repl {
     boolean color = System.getenv("NO_COLOR") == null;
     boolean timing = true;
     final List<Path> jars = new ArrayList<>();
+    String user = null;
+    final Set<String> groups = new LinkedHashSet<>();
     for (int i = 0; i < args.length; i++) {
       switch (args[i]) {
       case "-e":
@@ -89,6 +97,14 @@ public final class Repl {
       case "-j":
       case "--jar":
         jars.add(Path.of(argument(args, ++i)));
+        break;
+      case "-u":
+      case "--user":
+        user = name(argument(args, ++i));
+        break;
+      case "-g":
+      case "--group":
+        groups.add(name(argument(args, ++i)));
         break;
       case "--format":
         try {
@@ -126,6 +142,10 @@ public final class Repl {
           new URLClassLoader(urls, Repl.class.getClassLoader()));
     }
 
+    if (user == null && !groups.isEmpty()) {
+      usage("--group needs --user");
+    }
+    final Identity identity = user == null ? null : new Identity(user, groups);
     final boolean interactive = work.isEmpty() && System.console() != null;
     try (Session session = Monoql.builder().build()) {
       if (!interactive) {
@@ -138,6 +158,9 @@ public final class Repl {
           shell.format(formatter);
         }
         init(shell, init, explicitInit);
+        if (identity != null) {
+          shell.as(identity);
+        }
         if (work.isEmpty()) {
           shell.run(new String(System.in.readAllBytes(),
               StandardCharsets.UTF_8));
@@ -159,8 +182,18 @@ public final class Repl {
         }
         return;
       }
-      interact(session, home, init, explicitInit, formatter, color, timing);
+      interact(session, home, init, explicitInit, identity, formatter, color,
+          timing);
     }
+  }
+
+  /** Reads a name as {@code !as} does: upper case unless quoted. */
+  private static String name(String argument) {
+    final List<String> names = Shell.names(argument);
+    if (names.size() != 1) {
+      usage("Expected one name, not '" + argument + "'");
+    }
+    return names.get(0);
   }
 
   private static String argument(String[] args, int i) {
@@ -183,8 +216,8 @@ public final class Repl {
   }
 
   private static void interact(Session session, Path home, Path init,
-      boolean explicitInit, Formatter formatter, boolean color,
-      boolean timing) throws IOException {
+      boolean explicitInit, Identity identity, Formatter formatter,
+      boolean color, boolean timing) throws IOException {
     try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
       final Shell shell = new Shell(session, terminal.writer(), color);
       shell.timing(timing);
@@ -194,7 +227,7 @@ public final class Repl {
       // Ctrl-C while a statement runs stops the statement. (While a line is
       // being edited, the line reader has its own handler.)
       terminal.handle(Terminal.Signal.INT, signal -> shell.cancel());
-      final Completions completions = new Completions(session);
+      final Completions completions = new Completions(shell::session);
       final Completer completer = (reader, line, candidates) -> {
         final String word = line.word().substring(0, line.wordCursor());
         for (Completions.Candidate c
@@ -227,6 +260,9 @@ public final class Repl {
           banner(color) + "  Type !help for commands; end SQL with a "
               + "semicolon.");
       init(shell, init, explicitInit);
+      if (identity != null) {
+        shell.as(identity);
+      }
       while (true) {
         final String prompt = color
             ? new AttributedStringBuilder()

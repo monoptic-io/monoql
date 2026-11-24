@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /** Works out what could come next: commands, keywords, and the names of
  * catalogs, schemas, tables and columns.
@@ -31,10 +32,14 @@ final class Completions {
   record Candidate(String value, String kind) {
   }
 
-  private final Session session;
+  private final Supplier<Session> current;
 
-  Completions(Session session) {
-    this.session = session;
+  /** Creates a completer.
+   *
+   * @param current Returns the session to complete against, which the
+   *     shell may change */
+  Completions(Supplier<Session> current) {
+    this.current = current;
   }
 
   /** Suggests completions of a word.
@@ -101,8 +106,8 @@ final class Completions {
 
   private List<List<String>> defaultPaths() {
     final List<List<String>> paths = new ArrayList<>();
-    final String catalog = session.currentCatalog();
-    final String schema = session.currentSchema();
+    final String catalog = current.get().currentCatalog();
+    final String schema = current.get().currentSchema();
     if (catalog != null && schema != null) {
       paths.add(List.of(catalog, schema));
     }
@@ -127,7 +132,7 @@ final class Completions {
 
   /** Resolves an absolute path to a schema or a table. */
   private List<Object> resolveExact(List<String> path) {
-    SchemaPlus schema = session.rootSchema();
+    SchemaPlus schema = current.get().rootSchema();
     for (int i = 0; i < path.size(); i++) {
       final String name = path.get(i);
       final SchemaPlus child = schema.subSchemas().get(name);

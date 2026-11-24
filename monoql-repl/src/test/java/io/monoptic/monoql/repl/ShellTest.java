@@ -178,7 +178,7 @@ class ShellTest {
   @Test void completion() {
     run("create table customers (id int, full_name varchar);");
     run("create table \"Mixed Case\" (a int);");
-    final Completions completions = new Completions(session);
+    final Completions completions = new Completions(() -> session);
     assertEquals(List.of("!tables", "!triggers", "!timing"),
         values(completions, "!t", "!t"));
     // Names are offered in the case being typed, and quoted if need be.
@@ -208,6 +208,30 @@ class ShellTest {
     assertTrue(afterWhere.contains("from"), afterWhere.toString());
     assertTrue(values(completions, "pa", "pa").contains("pause"));
     assertTrue(values(completions, "SEL", "SEL").contains("SELECT"));
+  }
+
+  /** {@code !as} switches who the shell acts as, over the same
+   * catalogs. */
+  @Test void actingAs() {
+    run("create table t (id int); insert into t values (1);");
+    assertEquals("MEMORY.MAIN> ", shell.prompt());
+    assertEquals("Acting as user ANN, in ANALYSTS; not authenticated\n",
+        run("!as ann analysts"));
+    assertEquals("ANN@MEMORY.MAIN> ", shell.prompt());
+    assertEquals("Error: User ANN lacks SELECT on MEMORY.MAIN.T\n",
+        run("select * from t;"));
+    assertTrue(run("!settings").contains("│ groups       │ ANALYSTS"));
+    assertEquals("Acting as nobody; nothing is checked\n", run("!as"));
+    run("grant select on t to group analysts;");
+    run("!as ann analysts");
+    assertTrue(run("select * from t;").contains("1 row"));
+    // Quoted names are taken as they are; and one user is not another.
+    assertEquals("Acting as user bob@example.com; not authenticated\n",
+        run("!as 'bob@example.com'"));
+    assertEquals("bob@example.com@MEMORY.MAIN> ", shell.prompt());
+    assertTrue(run("select * from t;").startsWith("Error: User bob@"));
+    run("!as");
+    assertTrue(run("select * from t;").contains("1 row"));
   }
 
   /** A long result is printed a batch at a time, each batch a table of

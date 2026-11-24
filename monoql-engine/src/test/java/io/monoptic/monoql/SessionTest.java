@@ -45,7 +45,8 @@ class SessionTest {
     assertEquals(List.of("[MEMORY, embedded, null]"),
         rows(session, "show catalogs"));
     assertEquals(
-        List.of("[catalog, MEMORY]", "[schema, MAIN]", "[user, null]"),
+        List.of("[catalog, MEMORY]", "[groups, null]", "[schema, MAIN]",
+            "[user, null]"),
         rows(session, "show settings"));
     assertEquals(List.of("[2, x]"), rows(session, "select 1 + 1, 'x'"));
   }

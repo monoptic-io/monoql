@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.catalog.AccessDeniedException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.Grant;
@@ -30,8 +31,9 @@ import java.util.function.UnaryOperator;
  * <li>A catalog with no readable {@code GRANTS} table is not checked: there
  *     is nothing to check against, and its backend is assumed to enforce
  *     its own rules.
- * <li>A grant applies to the user if it names the user, or a role the user
- *     holds, directly or through other roles.
+ * <li>A grant applies to the user if it names the user, a group the user
+ *     belongs to, or a role that any of those holds, directly or through
+ *     other roles.
  * <li>A grant on a catalog or schema covers everything in it.
  * <li>{@code OWNERSHIP} of something includes every privilege on it.
  *     {@code ALL PRIVILEGES} on a schema or catalog is the same thing;
@@ -90,10 +92,12 @@ final class Authorizer {
   enum Op { INSERT, UPDATE, DELETE }
 
   private final String user;
+  private final Set<String> groups;
   private final CatalogRegistry registry;
 
-  Authorizer(String user, CatalogRegistry registry) {
-    this.user = user;
+  Authorizer(Identity identity, CatalogRegistry registry) {
+    this.user = identity == null ? null : identity.user();
+    this.groups = identity == null ? Set.of() : identity.groups();
     this.registry = registry;
   }
 
@@ -120,17 +124,24 @@ final class Authorizer {
     final Set<String> roles = roles(catalog);
     final List<Grant> grants = new ArrayList<>();
     for (Grant g : all) {
-      final String type = g.granteeType();
-      final boolean any = type.equals(Grant.PRINCIPAL);
-      if ((any || type.equals("USER")) && g.grantee().equals(user)
-          || (any || type.equals("ROLE")) && roles.contains(g.grantee())) {
+      if (applies(g.granteeType(), g.grantee(), roles)) {
         grants.add(g);
       }
     }
     return grants;
   }
 
-  /** The roles the user holds, directly or through other roles. */
+  /** Whether a grantee is the user, one of the user's groups, or one of
+   * the given roles. A grantee of no stated kind may be any of them. */
+  private boolean applies(String type, String grantee, Set<String> roles) {
+    final boolean any = type.equals(Grant.PRINCIPAL);
+    return (any || type.equals("USER")) && grantee.equals(user)
+        || (any || type.equals("GROUP")) && groups.contains(grantee)
+        || (any || type.equals("ROLE")) && roles.contains(grantee);
+  }
+
+  /** The roles the user holds: directly, through a group, or through
+   * other roles. */
   private Set<String> roles(Catalog catalog) {
     final Set<String> roles = new HashSet<>();
     final List<RoleGrant> all = new ArrayList<>();
@@ -143,10 +154,7 @@ final class Authorizer {
     while (grew) {
       grew = false;
       for (RoleGrant g : all) {
-        final String type = g.granteeType();
-        final boolean any = type.equals(Grant.PRINCIPAL);
-        if ((any || type.equals("USER")) && g.grantee().equals(user)
-            || (any || type.equals("ROLE")) && roles.contains(g.grantee())) {
+        if (applies(g.granteeType(), g.grantee(), roles)) {
           grew |= roles.add(g.roleName());
         }
       }

@@ -11,7 +11,7 @@ import io.monoptic.monoql.catalog.MetaRow;
  *
  * <p>{@code USE} and {@code SET} update these rows. The settings are
  * {@link #CATALOG} and {@link #SCHEMA}, the defaults for unqualified names,
- * and {@link #USER}, which cannot be changed. */
+ * and {@link #USER} and {@link #GROUPS}, which cannot be changed. */
 public record Setting(String settingName, String settingValue)
     implements MetaRow {
   public static final String CATALOG = "catalog";
@@ -19,6 +19,9 @@ public record Setting(String settingName, String settingValue)
   /** Who the session acts as; null if nobody, in which case nothing is
    * checked. Fixed when the session is built. */
   public static final String USER = "user";
+  /** The groups the session's user belongs to, separated by commas; null
+   * if the session acts as nobody. Fixed, like {@link #USER}. */
+  public static final String GROUPS = "groups";
 
   @Override public Key key() {
     return Key.of(settingName);

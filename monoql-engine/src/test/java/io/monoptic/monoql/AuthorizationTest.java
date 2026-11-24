@@ -32,24 +32,19 @@ class AuthorizationTest {
   private Session ann;
   private Session bob;
 
-  private Session as(String user) {
-    return Monoql.builder().catalog("C", catalog).use("C", "S").user(user)
-        .build();
-  }
-
   @BeforeEach void open() {
     root = Monoql.builder().catalog("C", catalog).build();
     run(root, "create schema s", "use c.s",
         "create table t (id int)", "insert into t values (1), (2)",
         "create table u (id int)", "insert into u values (10)");
-    ann = as("ANN");
-    bob = as("BOB");
+    ann = root.as(Identity.of("ANN", "ANALYSTS", "STAFF"));
+    bob = root.as(Identity.of("BOB"));
   }
 
   @AfterEach void close() {
-    root.close();
     ann.close();
     bob.close();
+    root.close();
   }
 
   private static String denied(Session session, String sql) {
@@ -109,6 +104,54 @@ class AuthorizationTest {
     // A grant to a role is not a grant to a user of the same name.
     run(root, "grant select on u to role bob");
     denied(bob, "select * from u");
+  }
+
+  /** Groups come with the identity; monoql does not keep them. */
+  @Test void groups() {
+    run(root, "grant select on t to group analysts");
+    assertEquals(2, rows(ann, "select * from t").size());
+    denied(bob, "select * from t");
+    // A group can hold a role, and a grantee of no stated kind can be one.
+    run(root, "create role writer", "grant insert on u to role writer",
+        "grant role writer to group staff", "grant select on u to staff");
+    run(ann, "insert into u values (11)");
+    assertEquals(2, rows(ann, "select * from u").size());
+    denied(bob, "insert into u values (12)");
+    // A group is not a user of the same name, nor the other way about.
+    try (Session analysts = root.as(Identity.of("ANALYSTS"))) {
+      denied(analysts, "select * from t");
+    }
+    run(root, "grant delete on t to group bob");
+    denied(bob, "delete from t");
+    assertEquals(List.of("[user, ANN]", "[groups, ANALYSTS, STAFF]"),
+        rows(ann, "select * from metadata.settings"
+            + " where setting_name in ('user', 'groups')"));
+  }
+
+  /** Sessions derived from one another share catalogs, and nothing
+   * else. */
+  @Test void derivedSessions() {
+    assertEquals("ANN", ann.identity().user());
+    assertEquals("S", ann.currentSchema());
+    run(root, "create schema other", "use other");
+    assertEquals("S", ann.currentSchema());
+    // A catalog mounted through one is there for the others; and gone for
+    // the others when it is dropped.
+    run(root, "create catalog extra with (type = 'memory')",
+        "create schema extra.e", "create table extra.e.x (id int)",
+        "grant select on extra.e.x to ann");
+    assertEquals(0, rows(ann, "select * from extra.e.x").size());
+    run(ann, "use extra.e");
+    run(root, "drop catalog extra");
+    assertEquals(null, ann.currentCatalog());
+    // Whoever holds a session may say who it speaks for.
+    try (Session nobody = ann.as(null)) {
+      assertEquals(null, nobody.identity());
+      run(nobody, "drop table c.s.t");
+    }
+    // Closing a derived session leaves the catalogs open.
+    ann.close();
+    assertEquals(1, rows(root, "select * from c.s.u").size());
   }
 
   @Test void grantsOnSchemasAndCatalogs() {
@@ -312,7 +355,8 @@ class AuthorizationTest {
       run(setup, "create schema s", "create table s.t (id int)");
     }
     try (Session session =
-        Monoql.builder().catalog("X", ungoverned).user("ANN").build()) {
+        Monoql.builder().catalog("X", ungoverned)
+            .identity(Identity.of("ANN")).build()) {
       run(session, "insert into x.s.t values (1)", "create table x.s.u (i int)");
       assertEquals(List.of("[1]"), rows(session, "select * from x.s.t"));
     }
