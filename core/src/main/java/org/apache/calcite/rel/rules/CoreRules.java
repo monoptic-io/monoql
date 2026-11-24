@@ -51,7 +51,6 @@ import org.apache.calcite.rel.rules.FilterTableFunctionTransposeRule.Config;
 import org.apache.calcite.rel.rules.materialize.MaterializedViewRules;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexUtil;
-import org.apache.calcite.schema.impl.StarTable;
 
 /** Rules that perform logical transformations on relational expressions.
  *
@@ -83,16 +82,6 @@ public class CoreRules {
       AGGREGATE_ANY_PULL_UP_CONSTANTS =
       AggregateProjectPullUpConstantsRule.Config.ANY.toRule();
 
-  /** Rule that matches an {@link Aggregate} on
-   * a {@link StarTable.StarTableScan}. */
-  public static final AggregateStarTableRule AGGREGATE_STAR_TABLE =
-      AggregateStarTableRule.Config.DEFAULT.toRule();
-
-  /** Variant of {@link #AGGREGATE_STAR_TABLE} that accepts a {@link Project}
-   * between the {@link Aggregate} and its {@link StarTable.StarTableScan}
-   * input. */
-  public static final AggregateProjectStarTableRule AGGREGATE_PROJECT_STAR_TABLE =
-      AggregateProjectStarTableRule.Config.DEFAULT.toRule();
 
   /** Rule that reduces aggregate functions in
    * an {@link Aggregate} to simpler forms. */

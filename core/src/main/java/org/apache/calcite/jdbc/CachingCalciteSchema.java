@@ -54,7 +54,7 @@ class CachingCalciteSchema extends CalciteSchema {
   /** Creates a CachingCalciteSchema. */
   CachingCalciteSchema(@Nullable CalciteSchema parent, Schema schema,
       String name) {
-    this(parent, schema, name, null, null, null, null, null, null, null, null);
+    this(parent, schema, name, null, null, null, null, null, null, null);
   }
 
   @SuppressWarnings({"argument.type.incompatible", "return.type.incompatible"})
@@ -62,13 +62,12 @@ class CachingCalciteSchema extends CalciteSchema {
       String name,
       @Nullable NameMap<CalciteSchema> subSchemaMap,
       @Nullable NameMap<TableEntry> tableMap,
-      @Nullable NameMap<LatticeEntry> latticeMap,
       @Nullable NameMap<TypeEntry> typeMap,
       @Nullable NameMultimap<FunctionEntry> functionMap,
       @Nullable NameSet functionNames,
       @Nullable NameMap<FunctionEntry> nullaryFunctionMap,
       @Nullable List<? extends List<String>> path) {
-    super(parent, schema, name, subSchemaMap, tableMap, latticeMap, typeMap,
+    super(parent, schema, name, subSchemaMap, tableMap, typeMap,
         functionMap, functionNames, nullaryFunctionMap, path);
     this.implicitFunctionCache =
         new AbstractCached<NameSet>() {
@@ -204,7 +203,7 @@ class CachingCalciteSchema extends CalciteSchema {
       SchemaVersion version) {
     CalciteSchema snapshot =
         new CachingCalciteSchema(parent, schema.snapshot(version), name, null,
-            tableMap, latticeMap, typeMap,
+            tableMap, typeMap,
             functionMap, functionNames, nullaryFunctionMap, getPath());
     for (CalciteSchema subSchema : subSchemaMap.map().values()) {
       CalciteSchema subSchemaSnapshot = subSchema.snapshot(snapshot, version);

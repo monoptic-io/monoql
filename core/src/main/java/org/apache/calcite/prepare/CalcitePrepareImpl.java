@@ -35,7 +35,6 @@ import org.apache.calcite.interpreter.BindableConvention;
 import org.apache.calcite.interpreter.Interpreters;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.CalciteSchema;
-import org.apache.calcite.jdbc.CalciteSchema.LatticeEntry;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.Ord;
 import org.apache.calcite.linq4j.Queryable;
@@ -51,7 +50,6 @@ import org.apache.calcite.linq4j.tree.MethodCallExpression;
 import org.apache.calcite.linq4j.tree.NewExpression;
 import org.apache.calcite.linq4j.tree.ParameterExpression;
 import org.apache.calcite.linq4j.tree.PseudoField;
-import org.apache.calcite.materialize.MaterializationService;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.Convention;
 import org.apache.calcite.plan.ConventionTraitDef;
@@ -919,28 +917,6 @@ public class CalcitePrepareImpl implements CalcitePrepare {
     }
   }
 
-  protected void populateMaterializations(Context context,
-      RelOptCluster cluster, Prepare.Materialization materialization) {
-    // REVIEW: initialize queryRel and tableRel inside MaterializationService,
-    // not here?
-    try {
-      final CalciteSchema schema = materialization.materializedTable.schema;
-      CalciteCatalogReader catalogReader =
-          new CalciteCatalogReader(
-              schema.root(),
-              materialization.viewSchemaPath,
-              context.getTypeFactory(),
-              context.config());
-      final CalciteMaterializer materializer =
-          new CalciteMaterializer(this, context, catalogReader, schema,
-              cluster, createConvertletTable());
-      materializer.populate(materialization);
-    } catch (Exception e) {
-      throw new RuntimeException("While populating materialization "
-          + materialization.materializedTable.path(), e);
-    }
-  }
-
   private static RelDataType makeStruct(
       RelDataTypeFactory typeFactory,
       RelDataType type) {
@@ -1080,9 +1056,7 @@ public class CalcitePrepareImpl implements CalcitePrepare {
       // Trim unused fields.
       root = trimUnusedFields(root);
 
-      final List<Materialization> materializations = ImmutableList.of();
-      final List<CalciteSchema.LatticeEntry> lattices = ImmutableList.of();
-      root = optimize(root, materializations, lattices);
+      root = optimize(root);
 
       if (timingTracer != null) {
         timingTracer.traceTime("end optimization");
@@ -1244,21 +1218,6 @@ public class CalcitePrepareImpl implements CalcitePrepare {
           return ((Typed) bindable).getElementType();
         }
       };
-    }
-
-    @Override protected List<Materialization> getMaterializations() {
-      final List<Prepare.Materialization> materializations =
-          context.config().materializationsEnabled()
-              ? MaterializationService.instance().query(schema)
-              : ImmutableList.of();
-      for (Prepare.Materialization materialization : materializations) {
-        prepare.populateMaterializations(context, cluster, materialization);
-      }
-      return materializations;
-    }
-
-    @Override protected List<LatticeEntry> getLattices() {
-      return Schemas.getLatticeEntries(schema);
     }
   }
 

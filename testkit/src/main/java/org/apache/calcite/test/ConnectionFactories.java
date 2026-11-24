@@ -218,7 +218,6 @@ public abstract class ConnectionFactories {
       SchemaPlus rootSchema = con.getRootSchema();
       switch (schemaSpec) {
       case CLONE_FOODMART:
-      case JDBC_FOODMART_WITH_LATTICE:
         CalciteAssert.addSchema(rootSchema, CalciteAssert.SchemaSpec.JDBC_FOODMART);
         // fall through
       default:

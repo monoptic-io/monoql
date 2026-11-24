@@ -1749,8 +1749,7 @@ public class RelBuilderTest {
             EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE);
     final Program program = Programs.of(prepareRules);
     node =
-        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of());
 
     // collations are lost as the sort is on column [1, 0], but we group on 0, convention stays
     node = builder.push(node)
@@ -1797,8 +1796,7 @@ public class RelBuilderTest {
 
     // turn the logical plan into a physical plan so that a convention can be set
     node =
-        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of());
 
 
     node = builder.push(node)
@@ -1849,8 +1847,7 @@ public class RelBuilderTest {
 
     // turn the logical plan into a physical plan so that a convention can be set
     node =
-        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of());
 
 
     node = builder.push(node)
@@ -1896,8 +1893,7 @@ public class RelBuilderTest {
 
     // turn the logical plan into a physical plan so that a distribution can be set
     node =
-        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(node.getCluster().getPlanner(), node, desiredTraits, ImmutableList.of());
 
     // setting the distribution drops the collations
     node = node.copy(desiredTraits.plus(RelDistributions.BROADCAST_DISTRIBUTED), node.getInputs());
@@ -5864,7 +5860,7 @@ public class RelBuilderTest {
     Program program = Programs.of(prepareRules);
     RelNode planAfter =
         program.run(planBefore.getCluster().getPlanner(), planBefore,
-            desiredTraits, ImmutableList.of(), ImmutableList.of());
+            desiredTraits, ImmutableList.of());
     String expectedEnumerablePlan = "EnumerableLimit(offset=[?1], fetch=[?0])\n"
         + "  EnumerableTableScan(table=[[scott, DEPT]])\n";
     assertThat(planAfter, hasTree(expectedEnumerablePlan));

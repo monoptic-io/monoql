@@ -16,7 +16,6 @@
  */
 package org.apache.calcite.schema;
 
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.schema.lookup.Lookup;
 
@@ -86,9 +85,6 @@ public interface SchemaPlus extends Schema {
 
   /** Adds a type to this schema.  */
   void add(String name, RelProtoDataType type);
-
-  /** Adds a lattice to this schema. */
-  void add(String name, Lattice lattice);
 
   @Override boolean isMutable();
 

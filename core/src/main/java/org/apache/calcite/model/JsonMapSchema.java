@@ -55,9 +55,8 @@ public class JsonMapSchema extends JsonSchema {
   public JsonMapSchema(
       @JsonProperty(value = "name", required = true) String name,
       @JsonProperty("path") @Nullable List<Object> path,
-      @JsonProperty("cache") @Nullable Boolean cache,
-      @JsonProperty("autoLattice") @Nullable Boolean autoLattice) {
-    super(name, path, cache, autoLattice);
+      @JsonProperty("cache") @Nullable Boolean cache) {
+    super(name, path, cache);
   }
 
   @Override public void accept(ModelHandler handler) {

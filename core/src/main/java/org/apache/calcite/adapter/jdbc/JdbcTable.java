@@ -221,8 +221,12 @@ public class JdbcTable extends AbstractQueryableTable
     }
 
     @Override public Enumerator<T> enumerator() {
+      // monoql: the provider need not be a connection; only a type
+      // factory is wanted. CloneSchema reads tables with no connection.
       final JavaTypeFactory typeFactory =
-          ((CalciteConnection) queryProvider).getTypeFactory();
+          queryProvider instanceof CalciteConnection
+              ? ((CalciteConnection) queryProvider).getTypeFactory()
+              : new org.apache.calcite.jdbc.JavaTypeFactoryImpl();
       final SqlString sql = generateSql();
       final List<Pair<ColumnMetaData.Rep, Integer>> pairs =
           fieldClasses(typeFactory);

@@ -81,7 +81,6 @@ public class JsonJdbcSchema extends JsonSchema {
       @JsonProperty(value = "name", required = true) String name,
       @JsonProperty("path") @Nullable List<Object> path,
       @JsonProperty("cache") @Nullable Boolean cache,
-      @JsonProperty("autoLattice") @Nullable Boolean autoLattice,
       @JsonProperty("jdbcDriver") @Nullable String jdbcDriver,
       @JsonProperty("sqlDialectFactory") @Nullable String sqlDialectFactory,
       @JsonProperty(value = "jdbcUrl", required = true)  String jdbcUrl,
@@ -89,7 +88,7 @@ public class JsonJdbcSchema extends JsonSchema {
       @JsonProperty("jdbcPassword") @Nullable String jdbcPassword,
       @JsonProperty("jdbcCatalog") @Nullable String jdbcCatalog,
       @JsonProperty("jdbcSchema") @Nullable String jdbcSchema) {
-    super(name, path, cache, autoLattice);
+    super(name, path, cache);
     this.jdbcDriver = jdbcDriver;
     this.sqlDialectFactory = sqlDialectFactory;
     this.jdbcUrl = requireNonNull(jdbcUrl, "jdbcUrl");

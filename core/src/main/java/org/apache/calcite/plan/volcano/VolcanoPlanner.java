@@ -25,7 +25,6 @@ import org.apache.calcite.plan.ConventionTraitDef;
 import org.apache.calcite.plan.RelDigest;
 import org.apache.calcite.plan.RelOptCost;
 import org.apache.calcite.plan.RelOptCostFactory;
-import org.apache.calcite.plan.RelOptLattice;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptMaterializations;
 import org.apache.calcite.plan.RelOptPlanner;
@@ -178,12 +177,6 @@ public class VolcanoPlanner extends AbstractRelOptPlanner {
   private final List<RelOptMaterialization> materializations =
       new ArrayList<>();
 
-  /**
-   * Map of lattices by the qualified name of their star table.
-   */
-  private final Map<List<String>, RelOptLattice> latticeByName =
-      new LinkedHashMap<>();
-
   final Map<RelNode, Provenance> provenanceMap;
 
   final Deque<VolcanoRuleCall> ruleCallStack = new ArrayDeque<>();
@@ -297,13 +290,6 @@ public class VolcanoPlanner extends AbstractRelOptPlanner {
     materializations.add(materialization);
   }
 
-  @Override public void addLattice(RelOptLattice lattice) {
-    latticeByName.put(lattice.starRelOptTable.getQualifiedName(), lattice);
-  }
-
-  @Override public @Nullable RelOptLattice getLattice(RelOptTable table) {
-    return latticeByName.get(table.getQualifiedName());
-  }
 
   protected void registerMaterializations() {
     // Avoid using materializations while populating materializations!
@@ -343,16 +329,6 @@ public class VolcanoPlanner extends AbstractRelOptPlanner {
               materialization.queryRel.getRowType(),
               true);
       registerImpl(tableRel2, subset.set);
-    }
-
-    // Register rels using lattices.
-    final List<Pair<RelNode, RelOptLattice>> latticeUses =
-        RelOptMaterializations.useLattices(
-            originalRoot, ImmutableList.copyOf(latticeByName.values()));
-    if (!latticeUses.isEmpty()) {
-      RelNode rel = latticeUses.get(0).left;
-      Hook.SUB.run(rel);
-      registerImpl(rel, root.set);
     }
   }
 
@@ -409,7 +385,6 @@ public class VolcanoPlanner extends AbstractRelOptPlanner {
     this.prunedNodes.clear();
     this.ruleDriver.clear();
     this.materializations.clear();
-    this.latticeByName.clear();
     this.provenanceMap.clear();
   }
 

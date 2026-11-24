@@ -389,8 +389,7 @@ public class PlannerImpl implements Planner, ViewExpander {
             rel.getCluster().getPlanner()));
     Program program = programs.get(ruleSetIndex);
     return program.run(requireNonNull(planner, "planner"),
-        rel, requiredOutputTraits, ImmutableList.of(),
-        ImmutableList.of());
+        rel, requiredOutputTraits, ImmutableList.of());
   }
 
   /** Stage of a statement in the query-preparation lifecycle. */

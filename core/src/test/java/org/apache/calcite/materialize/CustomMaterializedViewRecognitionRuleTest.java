@@ -100,7 +100,7 @@ public class CustomMaterializedViewRecognitionRuleTest extends SqlToRelTestBase 
     final RelNode replacement = relBuilder.scan("mv0").build();
     final RelOptMaterialization relOptMaterialization =
         new RelOptMaterialization(replacement,
-            target, null, Lists.newArrayList("mv0"));
+            target, Lists.newArrayList("mv0"));
     final List<UnifyRule> rules =
         new ArrayList<>(SubstitutionVisitor.DEFAULT_RULES);
     rules.add(CustomizedMaterializationRule.INSTANCE);

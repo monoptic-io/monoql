@@ -54,10 +54,9 @@ public class JsonCustomSchema extends JsonMapSchema {
       @JsonProperty(value = "name", required = true) String name,
       @JsonProperty("path") @Nullable List<Object> path,
       @JsonProperty("cache") @Nullable Boolean cache,
-      @JsonProperty("autoLattice") @Nullable Boolean autoLattice,
       @JsonProperty(value = "factory", required = true) String factory,
       @JsonProperty("operand") @Nullable Map<String, Object> operand) {
-    super(name, path, cache, autoLattice);
+    super(name, path, cache);
     this.factory = requireNonNull(factory, "factory");
     this.operand = operand;
   }

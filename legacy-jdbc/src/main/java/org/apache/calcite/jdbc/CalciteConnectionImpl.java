@@ -41,8 +41,6 @@ import org.apache.calcite.linq4j.QueryProvider;
 import org.apache.calcite.linq4j.Queryable;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
-import org.apache.calcite.materialize.Lattice;
-import org.apache.calcite.materialize.MaterializationService;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.prepare.CalciteCatalogReader;
 import org.apache.calcite.rel.type.DelegatingTypeSystem;
@@ -177,18 +175,7 @@ abstract class CalciteConnectionImpl
     return new ContextImpl(this);
   }
 
-  /** Called after the constructor has completed and the model has been
-   * loaded. */
-  void init() {
-    final MaterializationService service = MaterializationService.instance();
-    for (CalciteSchema.LatticeEntry e : Schemas.getLatticeEntries(rootSchema)) {
-      final Lattice lattice = e.getLattice();
-      for (Lattice.Tile tile : lattice.computeTiles()) {
-        service.defineTile(lattice, tile.bitSet(), tile.measures, e.schema,
-            true, true);
-      }
-    }
-  }
+  // monoql: init(), which defined the tiles of lattices, is gone.
 
   @Override public <T> T unwrap(Class<T> iface) throws SQLException {
     if (iface == RelRunner.class) {

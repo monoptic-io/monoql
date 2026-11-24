@@ -86,7 +86,7 @@ class EnumerableLimitRuleTest {
     Program program = Programs.of(prepareRules);
     RelNode planAfter =
         program.run(planBefore.getCluster().getPlanner(), planBefore,
-            desiredTraits, ImmutableList.of(), ImmutableList.of());
+            desiredTraits, ImmutableList.of());
 
     // verify that the collation [0] is not lost in the final plan
     final RelCollation collation =

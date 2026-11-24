@@ -96,7 +96,7 @@ public class NormalizationTrimFieldTest extends SqlToRelTestBase {
     final RelNode replacement = relBuilder.scan("mv0").build();
     final RelOptMaterialization relOptMaterialization =
         new RelOptMaterialization(replacement,
-            target, null, Lists.newArrayList("mv0"));
+            target, Lists.newArrayList("mv0"));
     final List<Pair<RelNode, List<RelOptMaterialization>>> relOptimized =
         RelOptMaterializations.useMaterializedViews(query,
             ImmutableList.of(relOptMaterialization));
