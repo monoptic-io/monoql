@@ -311,8 +311,14 @@ CREATE CATALOG lake WITH (type = 'metastore',
   everything else, so a data catalog needs only `SCHEMAS`, `TABLES` and
   `bind`. Without a data catalog, tables are metadata only.
 - **Statements are atomic** in the metastore: see below.
-- **Materialized views have no rows of their own** yet: they read as their
-  definitions, and a `REFRESH` is recorded and nothing more.
+- **The rows of materialized views are in the data catalog too**, each
+  view's in a table of its name, made as the view is created and dropped
+  with it. The table keeps the shape it was made with: if what the view's
+  query returns changes shape (a `SELECT *` over a table that gains a
+  column, say), `CREATE OR REPLACE` the view. A refresh is as atomic as the
+  data catalog makes a statement, which for `jdbc` is not at all: a reader
+  can find the view empty while it is refreshed. Without a data catalog,
+  materialized views read as their definitions.
 - Other options: `driver`; and `create = false`, if the metastore's tables
   are made by someone else.
 

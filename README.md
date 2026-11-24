@@ -140,9 +140,10 @@ its release tooling are not here; monoql does not use them.
 This is an early cut. Known gaps, all of them deliberate omissions rather
 than silent no-ops:
 
-- A materialized view keeps its rows only in the in-memory catalog, where
-  `REFRESH` deletes them and inserts its query's. Elsewhere it reads as its
-  definition.
+- A materialized view keeps its rows in the in-memory catalog, and in a
+  `metastore` catalog that has a data catalog; `REFRESH` deletes them and
+  inserts its query's, which only the in-memory catalog does atomically.
+  Elsewhere it reads as its definition.
   Nothing runs a `SCHEDULE`, and no query is rewritten to use a
   materialized view it does not name.
 - Grants are enforced only for a session that acts as someone, and only in
