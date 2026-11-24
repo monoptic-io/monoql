@@ -163,6 +163,12 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
     return named;
   }
 
+  /** Returns the types of the dynamic parameters of the statement last
+   * validated, as the fields of a row type. */
+  RelDataType parameterRowType(SqlNode validated) {
+    return validator.getParameterRowType(validated);
+  }
+
   /** Returns the row type of the statement last validated. */
   RelDataType rowType(SqlNode validated) {
     return validator.getValidatedNodeType(validated);
