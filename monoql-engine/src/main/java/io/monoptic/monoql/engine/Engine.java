@@ -354,9 +354,11 @@ public final class Engine implements Lowering.Context {
             + " INSERT, UPDATE and DELETE, but not to other statements");
       }
       Result result = null;
+      Step skipped = null;
       for (Step step : lowered.steps()) {
         final SqlNode stepNode = parse(step.sql());
         if (step.fill() && !stored(stepNode)) {
+          skipped = step;
           continue;
         }
         result = run(stepNode, step, parameters);
@@ -364,6 +366,13 @@ public final class Engine implements Lowering.Context {
           // IF NOT EXISTS, and it exists: leave it as it is.
           break;
         }
+      }
+      if (result == null) {
+        // REFRESH, of a view whose catalog does not keep its rows.
+        throw new UnsupportedException("There is nothing to refresh: the"
+            + " catalog does not keep the rows of this materialized view,"
+            + " which reads as its definition. This was not run:\n"
+            + skipped.sql());
       }
       return result;
     });

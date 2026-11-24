@@ -6,9 +6,9 @@ package io.monoptic.monoql.catalog.standard;
 
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
-import io.monoptic.monoql.catalog.Firing;
 import io.monoptic.monoql.catalog.FunctionInfo;
 import io.monoptic.monoql.catalog.Grant;
+import io.monoptic.monoql.catalog.Job;
 import io.monoptic.monoql.catalog.Key;
 import io.monoptic.monoql.catalog.MaterializedViewInfo;
 import io.monoptic.monoql.catalog.MetaRow;
@@ -16,7 +16,6 @@ import io.monoptic.monoql.catalog.MetaTable;
 import io.monoptic.monoql.catalog.MetaTables;
 import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.PartitionInfo;
-import io.monoptic.monoql.catalog.Refresh;
 import io.monoptic.monoql.catalog.RoleGrant;
 import io.monoptic.monoql.catalog.RoleInfo;
 import io.monoptic.monoql.catalog.SchemaInfo;
@@ -43,11 +42,10 @@ public abstract class StandardCatalog implements Catalog {
   private final StandardMetaTable<TableInfo> tables;
   private final StandardMetaTable<ViewInfo> views;
   private final StandardMetaTable<MaterializedViewInfo> materializedViews;
-  private final StandardMetaTable<Refresh> refreshes;
   private final StandardMetaTable<PartitionInfo> partitions;
   private final StandardMetaTable<FunctionInfo> functions;
   private final StandardMetaTable<TriggerInfo> triggers;
-  private final StandardMetaTable<Firing> firings;
+  private final StandardMetaTable<Job> jobs;
   private final StandardMetaTable<RoleInfo> roles;
   private final StandardMetaTable<UserInfo> users;
   private final StandardMetaTable<Grant> grants;
@@ -135,17 +133,6 @@ public abstract class StandardCatalog implements Catalog {
           }
         };
 
-    refreshes =
-        new StandardMetaTable<>(MetaTables.REFRESHES.name(), storage,
-            storage.rows(MetaTables.REFRESHES)) {
-          @Override protected void beforeInsert(Refresh row) {
-            final Key key = Key.of(row.schemaName(), row.viewName());
-            if (materializedViews.get(key).isEmpty()) {
-              throw NotFoundException.of(materializedViews.name(), key);
-            }
-          }
-        };
-
     partitions =
         new StandardMetaTable<>(MetaTables.PARTITIONS.name(), storage,
             storage.rows(MetaTables.PARTITIONS)) {
@@ -178,14 +165,11 @@ public abstract class StandardCatalog implements Catalog {
           }
         };
 
-    firings =
-        new StandardMetaTable<>(MetaTables.FIRINGS.name(), storage,
-            storage.rows(MetaTables.FIRINGS)) {
-          @Override protected void beforeInsert(Firing row) {
-            final Key key = Key.of(row.schemaName(), row.triggerName());
-            if (triggers.get(key).isEmpty()) {
-              throw NotFoundException.of(triggers.name(), key);
-            }
+    jobs =
+        new StandardMetaTable<>(MetaTables.JOBS.name(), storage,
+            storage.rows(MetaTables.JOBS)) {
+          @Override protected void beforeInsert(Job row) {
+            requireSchema(row.schemaName());
           }
         };
 
@@ -282,10 +266,6 @@ public abstract class StandardCatalog implements Catalog {
     return materializedViews;
   }
 
-  @Override public MetaTable<Refresh> refreshes() {
-    return refreshes;
-  }
-
   @Override public MetaTable<PartitionInfo> partitions() {
     return partitions;
   }
@@ -298,8 +278,8 @@ public abstract class StandardCatalog implements Catalog {
     return triggers;
   }
 
-  @Override public MetaTable<Firing> firings() {
-    return firings;
+  @Override public MetaTable<Job> jobs() {
+    return jobs;
   }
 
   @Override public MetaTable<RoleInfo> roles() {

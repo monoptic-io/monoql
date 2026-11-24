@@ -211,8 +211,6 @@ class SessionTest {
         "refresh materialized view mv");
     assertEquals(List.of("[MV, @daily, true, null]"),
         rows(session, "show materialized views"));
-    assertEquals(List.of("[MAIN, MV]"),
-        rows(session, "select schema_name, view_name from metadata.refreshes"));
     assertThrows(NotFoundException.class,
         () -> session.execute("refresh materialized view nosuch"));
   }
@@ -291,8 +289,7 @@ class SessionTest {
     // REFRESH is these steps, and run by hand they do the same.
     assertEquals(
         List.of("DELETE FROM \"MEMORY\".\"MAIN\".\"MV\"",
-            "INSERT INTO \"MEMORY\".\"MAIN\".\"MV\"",
-            "INSERT INTO \"METADATA\".\"REFRESHES\""),
+            "INSERT INTO \"MEMORY\".\"MAIN\".\"MV\""),
         session.lower("refresh materialized view mv").sql().stream()
             .map(sql -> sql.lines().findFirst().orElseThrow()
                 .replaceAll(" \\(.*", ""))
@@ -460,11 +457,34 @@ class SessionTest {
     assertEquals(List.of("[TR, T, @hourly, false, null]"),
         rows(session, "show triggers"));
 
+    // Firing a trigger submits its action as a job, for whatever runs
+    // them; nothing here does, so nothing has happened to these.
     run(session, "fire trigger tr with (reason = 'test')", "fire trigger tr");
-    assertEquals(List.of("[TR, {reason=test}]", "[TR, {}]"),
-        rows(session, "select trigger_name, options from metadata.firings"));
+    assertEquals(List.of("[TR, {reason=test}, null]", "[TR, {}, null]"),
+        rows(session, "select job_name, options, state from metadata.jobs"
+            + " where statement like 'INSERT INTO \"T\"%'"
+            + " order by submitted_at"));
     assertThrows(NotFoundException.class,
         () -> session.execute("fire trigger nosuch"));
+
+    // A job is any statement, submitted by inserting it; so a trigger's
+    // action may be to submit one. How it went is not for a statement to
+    // say. Deleting it cancels it.
+    run(session, "insert into metadata.jobs (schema_name, job_name,"
+        + " submitted_at, statement) values ('MAIN', 'nightly',"
+        + " current_timestamp, 'refresh materialized view mv')");
+    for (String sql : List.of(
+        "update metadata.jobs set state = 'DONE' where job_name = 'nightly'",
+        "insert into metadata.jobs (schema_name, job_name, submitted_at,"
+            + " statement, error) values ('MAIN', 'j', current_timestamp,"
+            + " 'select 1', 'oops')")) {
+      final CatalogException e =
+          assertThrows(CatalogException.class, () -> session.execute(sql));
+      assertTrue(e.getMessage().contains("whatever runs them"),
+          e.getMessage());
+    }
+    run(session, "delete from metadata.jobs where job_name = 'nightly'");
+    assertEquals(2, rows(session, "select * from metadata.jobs").size());
     run(session, "drop trigger tr");
     assertEquals(List.of(), rows(session, "show triggers"));
   }

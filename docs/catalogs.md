@@ -30,7 +30,7 @@ calls:
 | SQL | Call |
 |---|---|
 | `SELECT`, `SHOW`, `DESCRIBE` | `scan` |
-| `INSERT`, `CREATE`, `GRANT`, `FIRE`, `REFRESH` | `insert` |
+| `INSERT`, `CREATE`, `GRANT`, `FIRE` | `insert` |
 | `UPSERT`, `CREATE OR REPLACE`, `GRANT` of something already granted | `get`, then `update` or `insert` |
 | `UPDATE`, `ALTER`, `PAUSE`, `RESUME`, `COMMENT ON` | `scan`, then `update` |
 | `DELETE`, `DROP`, `REVOKE` | `scan`, then `delete` |
@@ -46,11 +46,10 @@ public interface Catalog extends AutoCloseable {
   default MetaTable<TableInfo> tables()                       // CREATE TABLE, ALTER TABLE ...
   default MetaTable<ViewInfo> views()
   default MetaTable<MaterializedViewInfo> materializedViews()
-  default MetaTable<Refresh> refreshes()                      // REFRESH MATERIALIZED VIEW
   default MetaTable<PartitionInfo> partitions()               // ALTER TABLE ... ADD PARTITION
   default MetaTable<FunctionInfo> functions()
   default MetaTable<TriggerInfo> triggers()
-  default MetaTable<Firing> firings()                         // FIRE TRIGGER
+  default MetaTable<Job> jobs()                               // FIRE TRIGGER
   default MetaTable<RoleInfo> roles()
   default MetaTable<UserInfo> users()
   default MetaTable<Grant> grants()                           // GRANT ... ON, REVOKE ... ON
@@ -87,8 +86,7 @@ through `ROLE_GRANTS` if the catalog has that too. A catalog with no
 [the SQL reference](sql.md#enforcement).
 
 Support can be partial within a table, too. A read-only catalog implements
-only `scan`. A table of events (`firings`, `refreshes`) need only implement
-`insert`. A catalog may reject individual rows it cannot honor, by throwing
+only `scan`. A table of requests (`jobs`) need only implement `insert`. A catalog may reject individual rows it cannot honor, by throwing
 `UnsupportedException` from `insert`; the JDBC catalog, for instance, accepts
 tables but not table options.
 
@@ -117,11 +115,10 @@ with equal keys are the same object.
 | `TABLES` | `TableInfo(schemaName, tableName, columns, primaryKey, partitionKeys, comment, options)` | schema, table |
 | `VIEWS` | `ViewInfo(schemaName, viewName, columnNames, definition, comment)` | schema, view |
 | `MATERIALIZED_VIEWS` | `MaterializedViewInfo(schemaName, viewName, columnNames, definition, schedule, paused, comment, options)` | schema, view |
-| `REFRESHES` | `Refresh(schemaName, viewName, requestedAt)` | all |
 | `PARTITIONS` | `PartitionInfo(schemaName, tableName, spec, options)` | schema, table, spec |
 | `FUNCTIONS` | `FunctionInfo(schemaName, functionName, functionLanguage, definition, comment, options)` | schema, function |
 | `TRIGGERS` | `TriggerInfo(schemaName, triggerName, tableSchema, tableName, timing, events, schedule, action, paused, comment, options)` | schema, trigger |
-| `FIRINGS` | `Firing(schemaName, triggerName, firedAt, options)` | schema, trigger, time |
+| `JOBS` | `Job(schemaName, jobName, submittedAt, statement, options, state, startedAt, finishedAt, error)` | schema, job, time |
 | `ROLES` | `RoleInfo(roleName, comment, options)` | role |
 | `USERS` | `UserInfo(userName, comment, options)` | user |
 | `GRANTS` | `Grant(privilege, objectType, objectSchema, objectName, granteeType, grantee, grantable)` | all but `grantable` |

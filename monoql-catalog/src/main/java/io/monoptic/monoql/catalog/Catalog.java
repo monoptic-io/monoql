@@ -40,12 +40,6 @@ public interface Catalog extends AutoCloseable {
     return MetaTable.unsupported(MetaTables.MATERIALIZED_VIEWS.name());
   }
 
-  /** Requests to refresh a materialized view.
-   * {@code REFRESH MATERIALIZED VIEW}. */
-  default MetaTable<Refresh> refreshes() {
-    return MetaTable.unsupported(MetaTables.REFRESHES.name());
-  }
-
   /** Partitions of tables. {@code ALTER TABLE ... ADD PARTITION},
    * {@code ALTER TABLE ... DROP PARTITION}. */
   default MetaTable<PartitionInfo> partitions() {
@@ -63,9 +57,9 @@ public interface Catalog extends AutoCloseable {
     return MetaTable.unsupported(MetaTables.TRIGGERS.name());
   }
 
-  /** Requests to run a trigger. {@code FIRE TRIGGER}. */
-  default MetaTable<Firing> firings() {
-    return MetaTable.unsupported(MetaTables.FIRINGS.name());
+  /** Statements for something else to run. {@code FIRE TRIGGER}. */
+  default MetaTable<Job> jobs() {
+    return MetaTable.unsupported(MetaTables.JOBS.name());
   }
 
   /** Roles. {@code CREATE ROLE}, {@code DROP ROLE}. */

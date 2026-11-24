@@ -13,6 +13,7 @@ import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.NotFoundException;
+import io.monoptic.monoql.catalog.UnsupportedException;
 import io.monoptic.monoql.catalog.SchemaInfo;
 
 import org.junit.jupiter.api.AfterEach;
@@ -100,7 +101,7 @@ class MetastoreTest {
 
   private static final List<String> TABLES =
       List.of("schemas", "tables", "columns", "views", "materialized_views",
-          "refreshes", "partitions", "functions", "triggers", "firings",
+          "partitions", "functions", "triggers", "jobs",
           "roles", "users", "grants", "role_grants");
 
   private static Map<String, List<String>> dump(Session session) {
@@ -128,7 +129,6 @@ class MetastoreTest {
         "alter table t add column age int",
         "create view v (a, b) comment 'a view' as select id, name from t",
         "create materialized view mv schedule '0 * * * *' as select id from t",
-        "refresh materialized view mv",
         "pause materialized view mv",
         "create function f language java comment 'f' as 'com.example.F'",
         "create trigger tr after insert or update on t as 'notify'",
@@ -140,6 +140,11 @@ class MetastoreTest {
         "grant create table on catalog lake to group staff",
         "grant role analyst to user ann",
         "comment on column t.name is 'whom'");
+    // With no data catalog, a materialized view reads as its definition.
+    assertTrue(
+        assertThrows(UnsupportedException.class,
+            () -> first.execute("refresh materialized view mv")).getMessage()
+            .contains("nothing to refresh"));
     final Map<String, List<String>> written = dump(first);
     for (String table : TABLES) {
       assertTrue(!written.get(table).isEmpty(), table);
