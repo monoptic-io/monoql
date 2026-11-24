@@ -376,9 +376,7 @@ public final class Engine implements Lowering.Context {
         // The catalog cannot list these rows, which is why none was found.
         // It may still be able to delete them; ask it to.
         for (Map<String, Object> values : step.doomed()) {
-          final Object[] row = relation.row(values);
-          relation.authorize(authorizer, row);
-          relation.delete(row);
+          relation.delete(authorizer, relation.row(values));
         }
         return step.doomed().size();
       }
@@ -453,11 +451,10 @@ public final class Engine implements Lowering.Context {
     case INSERT:
       for (Object[] row : rows) {
         try {
-          relation.authorize(authorizer, row);
           if (upsert) {
-            relation.upsert(row);
+            relation.upsert(authorizer, row);
           } else {
-            relation.insert(row);
+            relation.insert(authorizer, row);
           }
           ++count;
         } catch (AlreadyExistsException e) {
@@ -472,16 +469,13 @@ public final class Engine implements Lowering.Context {
       final List<Object[]> after = new ArrayList<>();
       images(modify, rows, before, after);
       for (int i = 0; i < before.size(); i++) {
-        relation.authorize(authorizer, before.get(i));
-        relation.authorize(authorizer, after.get(i));
-        relation.update(before.get(i), after.get(i));
+        relation.update(authorizer, before.get(i), after.get(i));
         ++count;
       }
       return count;
     case DELETE:
       for (Object[] row : rows) {
-        relation.authorize(authorizer, row);
-        relation.delete(row);
+        relation.delete(authorizer, row);
         ++count;
       }
       return count;

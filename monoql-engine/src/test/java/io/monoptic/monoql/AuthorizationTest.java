@@ -141,44 +141,126 @@ class AuthorizationTest {
     assertEquals(List.of("[10]"), rows(bob, "select * from mine.peek"));
   }
 
-  /** DDL, DCL and control statements change metadata, which takes ALL
-   * PRIVILEGES on the schema or the catalog. */
-  @Test void metadata() {
-    assertEquals("User ANN lacks ALL PRIVILEGES on schema C.S, which"
-            + " changing METADATA.TABLES takes",
-        denied(ann, "create table x (id int)"));
-    denied(ann, "drop table t");
+  /** Creating takes a privilege on the schema; everything after that
+   * takes ownership, which creating confers. */
+  @Test void creatingAndOwning() {
+    assertEquals("User ANN lacks CREATE TABLE on C.S, which changing"
+            + " METADATA.TABLES takes",
+        denied(ann, "create table mine (id int)"));
+    run(root, "grant create table on schema s to ann");
+    run(ann, "create table mine (id int)");
+    assertEquals(List.of("[OWNERSHIP, TABLE, MINE, USER, ANN, true]"),
+        rows(root, "select privilege, object_type, object_name, grantee_type,"
+            + " grantee, grantable from metadata.grants"
+            + " where object_name = 'MINE'"));
+
+    // It is hers: to use, to change, to share, and to drop.
+    run(ann, "insert into mine values (1)", "update mine set id = 2",
+        "alter table mine add column name varchar",
+        "comment on table mine is 'ann''s'",
+        "grant select on mine to bob");
+    assertEquals(List.of("[2, null]"), rows(ann, "select * from mine"));
+    assertEquals(List.of("[2, null]"), rows(bob, "select * from mine"));
+
+    // CREATE TABLE is that and no more.
+    assertEquals("User ANN lacks OWNERSHIP on C.S.T, which changing"
+            + " METADATA.TABLES takes",
+        denied(ann, "drop table t"));
     denied(ann, "alter table t add column name varchar");
-    denied(ann, "comment on table t is 'mine'");
-    denied(ann, "create view w as select 1 as c");
+    denied(ann, "select * from t");
+    denied(ann, "grant select on t to bob");
+    assertEquals("User ANN lacks CREATE VIEW on C.S, which changing"
+            + " METADATA.VIEWS takes",
+        denied(ann, "create view w as select 1 as c"));
+    denied(ann, "create schema more");
     denied(ann, "create role r");
-    // The other spelling of the same thing is the same thing.
+    // And what is hers is not Bob's, whatever he may read.
+    denied(bob, "drop table mine");
+    denied(bob, "alter table mine drop column name");
+    denied(bob, "insert into mine values (3, 'x')");
+    denied(bob, "create table his (id int)");
+
+    // All privileges on a table are not the table.
+    run(root, "grant all on t to bob");
+    run(bob, "insert into t values (3)");
+    denied(bob, "drop table t");
+    denied(bob, "grant select on t to ann");
+
+    run(ann, "drop table mine");
+    assertEquals(List.of(),
+        rows(root, "select * from metadata.grants"
+            + " where object_name = 'MINE'"));
+  }
+
+  /** The other spelling of a statement is held to the same rules, and has
+   * the same consequences. */
+  @Test void theDmlIsTheStatement() {
     denied(ann, "delete from metadata.tables where table_name = 'T'");
     denied(ann, "insert into metadata.roles (role_name) values ('R')");
+    denied(ann, "insert into metadata.views (schema_name, view_name,"
+        + " definition) values ('S', 'W', 'SELECT 1 AS C')");
+    run(root, "grant create view on schema s to ann");
+    run(ann, "insert into metadata.views (schema_name, view_name,"
+        + " definition) values ('S', 'W', 'SELECT 1 AS C')");
+    assertEquals(List.of("[1]"), rows(ann, "select * from w"));
+    denied(bob, "delete from metadata.views where view_name = 'W'");
+    denied(bob, "create or replace view w as select 2 as c");
+    run(ann, "create or replace view w as select 2 as c",
+        "delete from metadata.views where view_name = 'W'");
+  }
 
+  @Test void schemasAndCatalogs() {
+    denied(ann, "create schema hers");
+    run(root, "grant create schema on catalog c to ann");
+    run(ann, "create schema hers", "create table hers.h (id int)",
+        "create view hers.v as select * from hers.h",
+        "grant select on schema hers to bob");
+    assertEquals(0, rows(bob, "select * from hers.v").size());
+    denied(bob, "create table hers.b (id int)");
+    denied(ann, "create table x (id int)"); // S is not hers
+    denied(ann, "drop schema s");
+    run(ann, "drop view hers.v", "drop table hers.h", "drop schema hers");
+    assertEquals(List.of(),
+        rows(root, "select * from metadata.grants"
+            + " where object_schema = 'HERS'"));
+
+    // ALL PRIVILEGES on a schema or a catalog does include owning it.
     run(root, "grant all on schema s to ann");
-    run(ann, "create table x (id int)", "insert into x values (1)",
-        "alter table x add column name varchar", "drop table x",
-        "grant select on t to user bob");
-    assertEquals(2, rows(bob, "select * from t").size());
-    // A schema is not the catalog.
-    assertEquals("User ANN lacks ALL PRIVILEGES on catalog C, which changing"
-            + " METADATA.SCHEMAS takes",
-        denied(ann, "create schema more"));
-    denied(ann, "create role r");
-    denied(ann, "grant select on catalog c to bob");
-
+    run(ann, "create table x (id int)", "drop table t",
+        "grant select on u to bob");
+    assertEquals("User ANN lacks OWNERSHIP on C, which changing"
+            + " METADATA.ROLES takes",
+        denied(ann, "create role r"));
     run(root, "grant all on catalog c to bob");
-    run(bob, "create schema more", "create table more.m (id int)",
-        "create role r", "grant role r to ann", "drop table more.m",
-        "drop schema more");
+    run(bob, "create schema more", "create role r", "grant role r to ann",
+        "drop table x", "drop schema more");
+  }
+
+  /** Grants belong to an object, not to its name. */
+  @Test void grantsFollowObjects() {
+    run(root, "grant select on t to bob", "drop table t",
+        "create table t (id int)");
+    denied(bob, "select * from t");
+    assertEquals(List.of(), rows(root, "select * from metadata.grants"));
+
+    run(root, "create schema other", "grant create table on schema s to ann",
+        "grant select on u to bob");
+    run(ann, "create table mine (id int)", "grant select on mine to bob");
+    // Moving a table into a schema is creating one there.
+    denied(ann, "alter table mine rename to other.elsewhere");
+    run(ann, "alter table mine rename to yours");
+    assertEquals(0, rows(bob, "select * from yours").size());
+    run(ann, "drop table yours");
+    // A session with no user owns nothing, and needs to own nothing.
+    assertEquals(List.of("[CREATE TABLE, null, ANN]", "[SELECT, U, BOB]"),
+        rows(root, "select privilege, object_name, grantee"
+            + " from metadata.grants order by 1"));
   }
 
   @Test void grantOption() {
     run(root, "grant select on t to ann", "grant insert on t to ann");
     assertEquals("User ANN may not grant or revoke SELECT on C.S.T: that takes"
-            + " ALL PRIVILEGES on its schema or catalog, or SELECT WITH GRANT"
-            + " OPTION",
+            + " OWNERSHIP of it, or SELECT WITH GRANT OPTION",
         denied(ann, "grant select on t to bob"));
     run(root, "grant select on t to ann with grant option");
     run(ann, "grant select on t to bob");

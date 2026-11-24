@@ -123,9 +123,8 @@ than silent no-ops:
 - Materialized views are stored and can be paused and refreshed, but no
   catalog stores materialized rows; they read as their definition.
 - Grants are enforced only for a session built with a user, and only in
-  catalogs that have a `GRANTS` table. DDL takes `ALL PRIVILEGES` on the
-  schema or catalog; there are no finer DDL privileges, and no ownership.
-  Anyone can read metadata. The shell cannot act as a user.
+  catalogs that have a `GRANTS` table. Anyone can read metadata. The shell
+  cannot act as a user.
 - Identifiers follow the SQL standard: unquoted names fold to upper case.
 - Functions are created from a class name or an opaque body; there is no
   syntax for signatures.
