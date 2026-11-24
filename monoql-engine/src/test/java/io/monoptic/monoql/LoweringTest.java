@@ -131,6 +131,9 @@ class LoweringTest {
                 + "as select a from t",
             "create materialized view x.gone refresh continuously "
                 + "as select b from t",
+            "pause materialized view x.live",
+            "resume materialized view x.live",
+            "pause materialized view x.gone",
             "drop materialized view x.gone",
             "create function x.f language python comment 'fc' as 'pass'",
             "create trigger x.tr after insert or delete on x.u "
