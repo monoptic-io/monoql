@@ -493,7 +493,8 @@ final class Lowering {
                           "JOB_NAME", SqlText.str(name.name),
                           "SUBMITTED_AT", "CURRENT_TIMESTAMP",
                           "SUBMITTED_BY", "CURRENT_USER",
-                          "STATEMENT", SqlText.str(fill.sql())))),
+                          "STATEMENT", SqlText.str(fill.sql()),
+                          "CONTINUOUS", SqlText.bool(true)))),
               false, null));
     } else {
       steps.add(fill);
@@ -842,6 +843,7 @@ final class Lowering {
                       "SUBMITTED_AT", "CURRENT_TIMESTAMP",
                           "SUBMITTED_BY", "CURRENT_USER",
                       "STATEMENT", SqlText.str(action),
+                      "CONTINUOUS", SqlText.bool(false),
                       "OPTIONS", SqlText.map(n.options)))));
     case REFRESH:
       // Out with the old rows and in with the new.

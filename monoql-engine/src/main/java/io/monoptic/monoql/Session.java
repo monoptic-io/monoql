@@ -15,6 +15,7 @@ import org.apache.calcite.tools.FrameworkConfig;
 
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** A conversation with monoql: a set of mounted catalogs, a current catalog
  * and schema, and the means to run statements against them.
@@ -95,6 +96,32 @@ public final class Session implements AutoCloseable {
    * read the rows it wants. */
   public void executeScript(String sql, Consumer<Result> sink) {
     engine.executeScript(sql, sink);
+  }
+
+  /** Runs some work as one unit: the statements it executes happen
+   * together, where each would otherwise be a unit of its own. If the work
+   * throws, catalogs that can undo forget what it did, and until it
+   * returns nobody else sees it; see
+   * {@link io.monoptic.monoql.catalog.Catalog#atomically}. Each catalog
+   * keeps that promise as far as it can, and separately from the others.
+   *
+   * <p>This is also how to tell a catalog that several changes belong
+   * together: one that reacts to changes, by replanning a job, say, can
+   * react once.
+   *
+   * <p>Read the rows of a query made inside before the work returns. Units
+   * may be nested; an inner one is part of the outer. The work runs on the
+   * calling thread, and holds whatever the catalogs lock until it ends.
+   *
+   * <pre>{@code
+   * session.atomically(() -> {
+   *   session.execute("CREATE MATERIALIZED VIEW a REFRESH CONTINUOUSLY AS ...");
+   *   session.execute("CREATE MATERIALIZED VIEW b REFRESH CONTINUOUSLY AS ...");
+   *   return null;
+   * });
+   * }</pre> */
+  public <T> T atomically(Supplier<T> work) {
+    return engine.atomically(work);
   }
 
   /** Asks the statement that is running, or whose rows are being read, to

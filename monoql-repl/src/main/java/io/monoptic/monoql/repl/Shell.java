@@ -130,6 +130,32 @@ final class Shell {
     return failed;
   }
 
+  /** Runs inputs as one unit: if any of them fails, catalogs that can undo
+   * forget what the others did. */
+  void atomically(Runnable work) {
+    /** Thrown to end the unit badly; what failed has been reported. */
+    final class Failed extends RuntimeException {
+    }
+
+    final boolean failedBefore = failed;
+    failed = false;
+    try {
+      root.atomically(() -> {
+        work.run();
+        if (failed) {
+          throw new Failed();
+        }
+        return null;
+      });
+    } catch (Failed e) {
+      out.println(style.red("Undone")
+          + ", as far as the catalogs can undo");
+      out.flush();
+    } finally {
+      failed |= failedBefore;
+    }
+  }
+
   /** Switches to acting as someone, over the same catalogs; or, given
    * null, back to acting as nobody.
    *

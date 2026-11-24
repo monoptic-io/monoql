@@ -71,9 +71,9 @@ class LoweringTest {
     assertEquals("INSERT INTO \"METADATA\".\"JOBS\" (\"CATALOG_NAME\", "
             + "\"SCHEMA_NAME\", \"JOB_NAME\", \"SUBMITTED_AT\", "
             + "\"SUBMITTED_BY\", "
-            + "\"STATEMENT\", \"OPTIONS\")\n"
+            + "\"STATEMENT\", \"CONTINUOUS\", \"OPTIONS\")\n"
             + "VALUES ('MEMORY', 'S', 'TR', CURRENT_TIMESTAMP, CURRENT_USER, "
-            + "'REFRESH MATERIALIZED VIEW \"MV\"', MAP['why', 'test'])",
+            + "'REFRESH MATERIALIZED VIEW \"MV\"', FALSE, MAP['why', 'test'])",
         lower("fire trigger tr with (why = 'test')"));
   }
 

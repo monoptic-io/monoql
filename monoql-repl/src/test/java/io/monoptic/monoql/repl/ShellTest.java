@@ -146,6 +146,26 @@ class ShellTest {
         .startsWith("Error: Cannot read"));
   }
 
+  /** Inputs run as one unit are undone together, where they can be. */
+  @Test void atomically() {
+    run("create table t (id int);");
+    buffer.getBuffer().setLength(0);
+    shell.atomically(() -> {
+      shell.execute("insert into t values (1);");
+      shell.execute("insert into t values (2);");
+      shell.execute("insert into nosuch values (3);");
+    });
+    assertTrue(buffer.toString().contains("Undone"), buffer.toString());
+    assertEquals("┌───┐\n│ C │\n├───┤\n│ 0 │\n└───┘\n1 row\n",
+        run("select count(*) as c from t;"));
+    shell.atomically(() -> {
+      shell.execute("insert into t values (1);");
+      shell.execute("insert into t values (2);");
+    });
+    assertEquals("┌───┐\n│ C │\n├───┤\n│ 2 │\n└───┘\n1 row\n",
+        run("select count(*) as c from t;"));
+  }
+
   @Test void lexer() {
     assertTrue(SqlLexer.isComplete(""));
     assertTrue(SqlLexer.isComplete("!tables"));

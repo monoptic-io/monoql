@@ -118,7 +118,7 @@ with equal keys are the same object.
 | `PARTITIONS` | `PartitionInfo(schemaName, tableName, spec, options)` | schema, table, spec |
 | `FUNCTIONS` | `FunctionInfo(schemaName, functionName, functionLanguage, definition, comment, options)` | schema, function |
 | `TRIGGERS` | `TriggerInfo(schemaName, triggerName, tableSchema, tableName, timing, events, schedule, action, paused, comment, options)` | schema, trigger |
-| `JOBS` | `Job(schemaName, jobName, submittedAt, submittedBy, statement, options, state, startedAt, finishedAt, error)` | schema, job, time |
+| `JOBS` | `Job(schemaName, jobName, submittedAt, submittedBy, statement, continuous, options, state, startedAt, finishedAt, error)` | schema, job, time |
 | `ROLES` | `RoleInfo(roleName, comment, options)` | role |
 | `USERS` | `UserInfo(userName, comment, options)` | user |
 | `GRANTS` | `Grant(privilege, objectType, objectSchema, objectName, granteeType, grantee, grantable)` | all but `grantable` |
@@ -247,7 +247,14 @@ Things to know:
 - **A change is to a row as it was read.** An `UPDATE` or `DELETE` of a
   metadata row that someone else has changed since the statement read it
   fails, rather than overwrite what they did.
-- **It is per statement.** There are no transactions that span statements.
+- **It is per statement, unless you say otherwise.** `Session.atomically`
+  runs several statements as one unit, and `--atomic` in the shell does
+  that for a script. Each catalog still keeps its own promise: the unit is
+  one transaction in a `metastore` or a `jdbc` catalog, and in the
+  in-memory catalog rows are undone together but metadata is not. A catalog
+  that reacts to changes, by replanning a job when `JOBS` changes, say, can
+  react once per unit, at its end. A unit holds whatever its catalogs lock
+  (a `metastore` tenant's writers wait) until it ends.
 
 ## Providers
 
