@@ -236,8 +236,7 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
     final Program program = config.getPrograms().isEmpty()
         ? Programs.standard() : config.getPrograms().get(0);
     final RelNode best =
-        program.run(planner, root.rel, traits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(planner, root.rel, traits, ImmutableList.of());
     if (root.isRefTrivial()) {
       return best;
     }

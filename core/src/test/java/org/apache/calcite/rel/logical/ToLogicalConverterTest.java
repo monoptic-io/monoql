@@ -115,7 +115,7 @@ class ToLogicalConverterTest {
 
     final Program program = Programs.of(RuleSets.ofList(planner.getRules()));
     return program.run(planner, rel, rel.getTraitSet().replace(EnumerableConvention.INSTANCE),
-        ImmutableList.of(), ImmutableList.of());
+        ImmutableList.of());
   }
 
   private static RelNode toLogical(RelNode rel) {

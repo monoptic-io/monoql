@@ -46,7 +46,6 @@ import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.impl.AbstractTableQueryable;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.schema.lookup.LikePattern;
 import org.apache.calcite.server.CalciteServerStatement;
 import org.apache.calcite.sql.SqlJdbcFunctionCall;
@@ -573,8 +572,6 @@ public class CalciteMetaImpl extends MetaImpl {
     return Linq4j.asEnumerable(schema.calciteSchema.getFunctionNames())
         .selectMany(name ->
             Linq4j.asEnumerable(schema.calciteSchema.getFunctions(name, true))
-                // exclude materialized views from the result set
-                .where(fn -> !(fn instanceof MaterializedViewTable.MaterializedViewTableMacro))
                 .select(fnx ->
                     new MetaFunction(
                         catalog,

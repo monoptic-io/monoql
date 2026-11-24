@@ -33,7 +33,6 @@ import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.tree.Expression;
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.model.ModelHandler;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.RelOptUtil;
@@ -867,20 +866,6 @@ public class CalciteAssert {
       return rootSchema.add(schema.schemaName,
           JdbcSchema.create(rootSchema, schema.schemaName, dataSource,
               cs.catalog, cs.schema));
-    case JDBC_FOODMART_WITH_LATTICE:
-      foodmart = addSchemaIfNotExists(rootSchema, SchemaSpec.JDBC_FOODMART);
-      final CalciteSchema foodmartSchema =
-          requireNonNull(foodmart.unwrap(CalciteSchema.class));
-      foodmart.add(schema.schemaName,
-          Lattice.create(foodmartSchema,
-              "select 1 from \"foodmart\".\"sales_fact_1997\" as s\n"
-                  + "join \"foodmart\".\"time_by_day\" as t using (\"time_id\")\n"
-                  + "join \"foodmart\".\"customer\" as c using (\"customer_id\")\n"
-                  + "join \"foodmart\".\"product\" as p using (\"product_id\")\n"
-                  + "join \"foodmart\".\"product_class\" as pc on p.\"product_class_id\" = pc.\"product_class_id\"",
-              true));
-      return foodmart;
-
     case MY_DB:
       return rootSchema.add(schema.schemaName, MY_DB_SCHEMA);
     case UNSIGNED_TYPE:
@@ -1198,8 +1183,6 @@ public class CalciteAssert {
         return with(CalciteAssert.SchemaSpec.JDBC_FOODMART);
       case FOODMART_CLONE:
         return with(SchemaSpec.CLONE_FOODMART);
-      case JDBC_FOODMART_WITH_LATTICE:
-        return with(SchemaSpec.JDBC_FOODMART_WITH_LATTICE);
       case JDBC_SCOTT:
         return with(SchemaSpec.JDBC_SCOTT);
       case SCOTT:
@@ -1285,60 +1268,6 @@ public class CalciteAssert {
     public final AssertThat withModel(URL model) {
       return with(CalciteConnectionProperty.MODEL,
           Sources.of(model).file().getAbsolutePath());
-    }
-
-    public final AssertThat withMaterializations(String model,
-         final String... materializations) {
-      return withMaterializations(model, false, materializations);
-    }
-
-    /** Adds materializations to the schema. */
-    public final AssertThat withMaterializations(String model, final boolean existing,
-        final String... materializations) {
-      return withMaterializations(model, builder -> {
-        assert materializations.length % 2 == 0;
-        final List<Object> list = builder.list();
-        for (int i = 0; i < materializations.length; i++) {
-          String table = materializations[i++];
-          final Map<String, Object> map = builder.map();
-          map.put("table", table);
-          if (!existing) {
-            map.put("view", table + "v");
-          }
-          String sql = materializations[i];
-          final String sql2 = sql.replace("`", "\"");
-          map.put("sql", sql2);
-          list.add(map);
-        }
-        return list;
-      });
-    }
-
-    /** Adds materializations to the schema. */
-    public final AssertThat withMaterializations(String model,
-        Function<JsonBuilder, List<Object>> materializations) {
-      final JsonBuilder builder = new JsonBuilder();
-      final List<Object> list = materializations.apply(builder);
-      final String buf =
-          "materializations: " + builder.toJsonString(list);
-      final String model2;
-      if (model.contains("defaultSchema: 'foodmart'")) {
-        int endIndex = model.lastIndexOf(']');
-        model2 = model.substring(0, endIndex)
-            + ",\n{ name: 'mat', "
-            + buf
-            + "}\n"
-            + "]"
-            + model.substring(endIndex + 1);
-      } else if (model.contains("type: ")) {
-        model2 =
-            model.replaceFirst("type: ",
-                java.util.regex.Matcher.quoteReplacement(buf + ",\n"
-                    + "type: "));
-      } else {
-        throw new AssertionError("do not know where to splice");
-      }
-      return withModel(model2);
     }
 
     public AssertQuery query(String sql) {
@@ -1957,10 +1886,6 @@ public class CalciteAssert {
     /** Configuration that contains geo-spatial functions. */
     GEO,
 
-    /** Configuration that contains an in-memory clone of the FoodMart
-     * database, plus a lattice to enable on-the-fly materializations. */
-    JDBC_FOODMART_WITH_LATTICE,
-
     /** Configuration that includes the metadata schema. */
     REGULAR_PLUS_METADATA,
 
@@ -2092,7 +2017,6 @@ public class CalciteAssert {
     FAKE_FOODMART("foodmart"),
     JDBC_FOODMART("foodmart"),
     CLONE_FOODMART("foodmart2"),
-    JDBC_FOODMART_WITH_LATTICE("lattice"),
     GEO("GEO"),
     HR("hr"),
     MY_DB("myDb"),

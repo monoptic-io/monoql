@@ -153,7 +153,7 @@ public class Driver extends UnregisteredDriver {
             throw new SQLException(e);
           }
         }
-        connection.init();
+        // monoql: connection.init() defined lattice tiles; gone.
       }
 
       @Nullable String model(CalciteConnectionImpl connection) {

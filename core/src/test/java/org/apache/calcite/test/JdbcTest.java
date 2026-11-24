@@ -2604,28 +2604,6 @@ public class JdbcTest {
         .runs();
   }
 
-  /** Tests that a relatively complex query on the foodmart schema creates
-   * an in-memory aggregate table and then uses it. */
-  @Disabled // DO NOT CHECK IN
-  @Test void testFoodmartLattice() throws IOException {
-    // 8: select ... from customer, sales, time ... group by ...
-    final FoodMartQuerySet set = FoodMartQuerySet.instance();
-    final FoodMartQuerySet.FoodmartQuery query = set.queries.get(8);
-    CalciteAssert.that()
-        .with(CalciteAssert.Config.JDBC_FOODMART_WITH_LATTICE)
-        .withDefaultSchema("foodmart")
-        .pooled()
-        .query(query.sql)
-        .enableMaterializations(true)
-        .explainContains(""
-            + "EnumerableCalc(expr#0..8=[{inputs}], c0=[$t3], c1=[$t2], c2=[$t1], c3=[$t0], c4=[$t8], c5=[$t8], c6=[$t6], c7=[$t4], c8=[$t7], c9=[$t5])\n"
-            + "  EnumerableSort(sort0=[$3], sort1=[$2], sort2=[$1], sort3=[$8], dir0=[ASC-nulls-last], dir1=[ASC-nulls-last], dir2=[ASC-nulls-last], dir3=[ASC-nulls-last])\n"
-            + "    EnumerableAggregate(group=[{0, 1, 2, 3, 4, 5, 6, 7, 8}])\n"
-            + "      EnumerableCalc(expr#0..9=[{inputs}], expr#10=[CAST($t0):INTEGER], expr#11=[1997], expr#12=[=($t10, $t11)], expr#13=['%Jeanne%'], expr#14=[LIKE($t9, $t13)], expr#15=[AND($t12, $t14)], $f0=[$t1], $f1=[$t2], $f2=[$t3], $f3=[$t4], $f4=[$t5], $f5=[$t6], $f6=[$t7], $f7=[$t8], $f8=[$t9], $f9=[$t0], $condition=[$t15])\n"
-            + "        EnumerableTableScan(table=[[foodmart, m{12, 18, 27, 28, 30, 35, 36, 37, 40, 46}]])")
-        .runs();
-  }
-
   /** Test case for (not yet fixed)
    * <a href="https://issues.apache.org/jira/browse/CALCITE-99">[CALCITE-99]
    * Recognize semi-join that has high selectivity and push it down</a>. */
@@ -6724,29 +6702,6 @@ public class JdbcTest {
     CalciteAssert.model(model)
         .query("select count(*) as c from \"foodmart\".\"time_by_day\"")
         .returns("C=730\n");
-  }
-
-  /** Defines a materialized view and tests that the query is rewritten to use
-   * it, and that the query produces the same result with and without it. There
-   * are more comprehensive tests in {@link MaterializationTest}. */
-  @Disabled("until JdbcSchema can define materialized views")
-  @Test void testModelWithMaterializedView() {
-    CalciteAssert.model(FoodmartSchema.FOODMART_MODEL)
-        .enable(false)
-        .query(
-            "select count(*) as c from \"foodmart\".\"sales_fact_1997\" join \"foodmart\".\"time_by_day\" using (\"time_id\")")
-        .returns("C=86837\n");
-    CalciteAssert.that().withMaterializations(
-        FoodmartSchema.FOODMART_MODEL,
-        "agg_c_10_sales_fact_1997",
-            "select t.`month_of_year`, t.`quarter`, t.`the_year`, sum(s.`store_sales`) as `store_sales`, sum(s.`store_cost`), sum(s.`unit_sales`), count(distinct s.`customer_id`), count(*) as `fact_count` from `time_by_day` as t join `sales_fact_1997` as s using (`time_id`) group by t.`month_of_year`, t.`quarter`, t.`the_year`")
-        .query(
-            "select t.\"month_of_year\", t.\"quarter\", t.\"the_year\", sum(s.\"store_sales\") as \"store_sales\", sum(s.\"store_cost\"), sum(s.\"unit_sales\"), count(distinct s.\"customer_id\"), count(*) as \"fact_count\" from \"time_by_day\" as t join \"sales_fact_1997\" as s using (\"time_id\") group by t.\"month_of_year\", t.\"quarter\", t.\"the_year\"")
-        .explainContains(
-            "JdbcTableScan(table=[[foodmart, agg_c_10_sales_fact_1997]])")
-        .enableMaterializations(false)
-        .explainContains("JdbcTableScan(table=[[foodmart, sales_fact_1997]])")
-        .sameResultWithMaterializationsDisabled();
   }
 
   /** Tests a JDBC connection that provides a model that contains custom

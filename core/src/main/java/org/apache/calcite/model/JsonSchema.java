@@ -63,15 +63,6 @@ public abstract class JsonSchema {
    */
   public final @Nullable List<Object> path;
 
-  /**
-   * List of tables in this schema that are materializations of queries.
-   *
-   * <p>The list may be empty.
-   */
-  public final List<JsonMaterialization> materializations = new ArrayList<>();
-
-  public final List<JsonLattice> lattices = new ArrayList<>();
-
   /** Whether to cache metadata (tables, functions and sub-schemas) generated
    * by this schema. Default value is {@code true}.
    *
@@ -90,27 +81,16 @@ public abstract class JsonSchema {
    */
   public final @Nullable Boolean cache;
 
-  /** Whether to create lattices in this schema based on queries occurring in
-   * other schemas. Default value is {@code false}. */
-  public final @Nullable Boolean autoLattice;
-
-  protected JsonSchema(String name, @Nullable List<Object> path, @Nullable Boolean cache,
-      @Nullable Boolean autoLattice) {
+  // monoql: no autoLattice, lattices or materializations.
+  protected JsonSchema(String name, @Nullable List<Object> path, @Nullable Boolean cache) {
     this.name = name;
     this.path = path;
     this.cache = cache;
-    this.autoLattice = autoLattice;
   }
 
   public abstract void accept(ModelHandler handler);
 
   public void visitChildren(ModelHandler modelHandler) {
-    for (JsonLattice jsonLattice : lattices) {
-      jsonLattice.accept(modelHandler);
-    }
-    for (JsonMaterialization jsonMaterialization : materializations) {
-      jsonMaterialization.accept(modelHandler);
-    }
   }
 
   /** Built-in schema types. */

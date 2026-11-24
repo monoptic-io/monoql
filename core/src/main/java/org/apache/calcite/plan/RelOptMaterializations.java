@@ -46,7 +46,7 @@ import java.util.function.Supplier;
 
 /**
  * Utility methods for using
- * materialized views and lattices for queries.
+ * materialized views for queries.
  */
 public abstract class RelOptMaterializations {
 
@@ -107,42 +107,6 @@ public abstract class RelOptMaterializations {
   }
 
   /**
-   * Returns a list of RelNode transformed from all possible lattice uses.
-   *
-   * @param rel       the original RelNode
-   * @param lattices  the lattice list
-   * @return the list of transformed RelNode together with their corresponding
-   *         lattice used in the transformation.
-   */
-  public static List<Pair<RelNode, RelOptLattice>> useLattices(
-      final RelNode rel, List<RelOptLattice> lattices) {
-    final Set<RelOptTable> queryTables = RelOptUtil.findTables(rel);
-    // Use a lattice if the query uses at least the central (fact) table of the
-    // lattice.
-    final List<Pair<RelNode, RelOptLattice>> latticeUses = new ArrayList<>();
-    final Set<List<String>> queryTableNames =
-        Sets.newHashSet(
-            Util.transform(queryTables, RelOptTable::getQualifiedName));
-    // Remember leaf-join form of root so we convert at most once.
-    final Supplier<RelNode> leafJoinRoot =
-        Suppliers.memoize(() -> RelOptMaterialization.toLeafJoinForm(rel));
-    for (RelOptLattice lattice : lattices) {
-      if (queryTableNames.contains(lattice.rootTable().getQualifiedName())) {
-        RelNode rel2 = lattice.rewrite(leafJoinRoot.get());
-        if (rel2 != null) {
-          if (CalciteSystemProperty.DEBUG.value()) {
-            System.out.println("use lattice:\n"
-                + RelOptUtil.toString(rel2));
-          }
-          latticeUses.add(Pair.of(rel2, lattice));
-        }
-      }
-    }
-
-    return latticeUses;
-  }
-
-  /**
    * Returns a list of materializations that can potentially be used by the query.
    */
   public static List<RelOptMaterialization> getApplicableMaterializations(
@@ -151,9 +115,7 @@ public abstract class RelOptMaterializations {
         DefaultDirectedGraph.create();
     final Map<List<String>, RelOptMaterialization> qnameMap = new HashMap<>();
     for (RelOptMaterialization materialization : materializations) {
-      // If materialization is a tile in a lattice, we will deal with it shortly.
-      if (materialization.qualifiedTableName != null
-          && materialization.starTable == null) {
+      if (materialization.qualifiedTableName != null) {
         final List<String> qname = materialization.qualifiedTableName;
         qnameMap.put(qname, materialization);
         for (RelOptTable usedTable
@@ -192,16 +154,6 @@ public abstract class RelOptMaterializations {
   private static List<RelNode> substitute(
       RelNode root, RelOptMaterialization materialization,
       List<SubstitutionVisitor.UnifyRule> materializationRules) {
-    // First, if the materialization is in terms of a star table, rewrite
-    // the query in terms of the star table.
-    if (materialization.starRelOptTable != null) {
-      RelNode newRoot =
-          RelOptMaterialization.tryUseStar(root, materialization.starRelOptTable);
-      if (newRoot != null) {
-        root = newRoot;
-      }
-    }
-
     // Push filters to the bottom, and combine projects on top.
     RelNode target = materialization.queryRel;
     // try to trim unused field in relational expressions.

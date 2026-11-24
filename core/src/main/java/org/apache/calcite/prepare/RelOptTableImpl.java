@@ -19,7 +19,6 @@ package org.apache.calcite.prepare;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.TableExpressionFactory;
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.plan.RelOptSchema;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.rel.RelCollation;
@@ -482,10 +481,6 @@ public class RelOptTableImpl extends Prepare.AbstractPreparingTable {
     }
 
     @Override public void add(String name, RelProtoDataType type) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override public void add(String name, Lattice lattice) {
       throw new UnsupportedOperationException();
     }
 

@@ -63,16 +63,55 @@ edit is marked `// monoql:` or goes through a class in
 |---|---|
 | `tools/Frameworks.java` | `withPrepare` (and so `withPlanner`, and `RelBuilder.create`) opened a `jdbc:calcite:` connection to obtain a planning environment. It now calls `StandalonePrepare`, which builds the environment directly. |
 | `jdbc/CalciteSchema.java` | `createRootSchema` no longer refers to `CalciteConnectionImpl.RootSchema` (it has its own copy), and adds the old `"metadata"` schema only if `legacy-jdbc` is present. |
-| `schema/impl/MaterializedViewTable.java` | The static `MATERIALIZATION_CONNECTION`, which opened a connection when the class loaded, is gone. Its users call `LegacyJdbc.materializationConnection()`. |
-| `schema/impl/ViewTableMacro.java`, `materialize/Lattice.java`, `materialize/MaterializationService.java`, `materialize/*LatticeStatisticProvider.java`, `adapter/clone/CloneSchema.java` | Obtain their connection from `LegacyJdbc`. |
+| `schema/impl/ViewTableMacro.java`, `schema/Schemas.java` | A view is analyzed with a context built on the spot (`Schemas.analyzeView` without a connection: default configuration, a fresh type factory), where upstream used a connection it kept for the purpose. |
+| `adapter/clone/CloneSchema.java`, `adapter/jdbc/JdbcTable.java` | `CloneSchema` reads its source tables through `Linq4j.DEFAULT_PROVIDER`, and a JDBC table no longer assumes the provider is a connection. |
 
 `LegacyJdbc` finds the driver with `ServiceLoader` if `legacy-jdbc` is on the
 class path, and otherwise throws `UnsupportedOperationException` with an
-explanation. So these upstream features **do not work in monoql proper**, by
-design, until someone reworks them without a connection: materializations
-and lattices, views defined through `ViewTableMacro` (model files), and
-`CloneSchema`. monoql has its own views
-and does not use any of them.
+explanation. Only two things still ask it for anything: a statement prepared
+through `Frameworks` that wants the connection it runs on, and the old
+`"metadata"` schema.
+
+### Lattices and the materialization service were removed
+
+These were written in terms of a connection, and monoql has its own
+materialized views (rows kept by a catalog, refreshed by DML; see
+`docs/sql.md`). Removed from core, with their tests:
+
+- `org.apache.calcite.materialize` (lattices, tiles, the lattice suggester,
+  `MaterializationService`), `org.apache.calcite.profile` and
+  `org.apache.calcite.statistic`, which served them.
+- `schema/impl/MaterializedViewTable`, `schema/impl/StarTable`,
+  `plan/RelOptLattice`, `prepare/CalciteMaterializer`,
+  `AggregateStarTableRule`, `AggregateProjectStarTableRule`, and
+  `model/JsonLattice`, `JsonMaterialization`, `JsonTile`, `JsonMeasure`.
+
+What that changed in files that stay, which a merge must keep true:
+
+| Upstream file | Change |
+|---|---|
+| `tools/Program.java`, `tools/Programs.java` | `Program.run` takes four arguments: there is no list of lattices. |
+| `plan/RelOptPlanner.java` and its implementations | No `addLattice` or `getLattice`. |
+| `plan/RelOptMaterialization.java`, `plan/RelOptMaterializations.java` | No star table: the constructor takes three arguments, and `tryUseStar` and `useLattices` are gone. |
+| `prepare/Prepare.java`, `prepare/CalcitePrepareImpl.java` | `optimize(root)` registers no materializations or lattices; `Prepare.Materialization` is gone. |
+| `jdbc/CalciteSchema.java` (and `Caching`/`SimpleCalciteSchema`), `schema/SchemaPlus.java`, `schema/Schemas.java` | No lattice map, `LatticeEntry`, `add(String, Lattice)`, or `FunctionEntry.isMaterialization`. |
+| `model/JsonSchema.java` and subclasses, `model/ModelHandler.java` | A model has no `lattices`, `materializations` or `autoLattice`. |
+| `tools/FrameworkConfig.java`, `tools/Frameworks.java` | No `isEvolveLattice` or `getStatisticProvider`. |
+| `rel/rules/CoreRules.java`, `plan/RelOptRules.java` | The two star-table rules are gone from the rule lists. |
+| `legacy-jdbc`: `CalciteConnectionImpl`, `Driver`, `CalciteMetaImpl` | No `init()` to define lattice tiles; `getFunctions` does not filter out materialized views. |
+
+The planner's own rewriting of queries to use materialized views
+(`RelOptMaterialization`, `SubstitutionVisitor`, `rel/rules/materialize`)
+never needed a connection and is still there, with its tests; monoql does
+not use it. `MaterializedViewTester`, in core's tests, populates its tables
+with the driver, as `MaterializationService` used to.
+
+Tests removed with the code: `LatticeTest`, `LatticeSuggesterTest`,
+`MaterializationTest`, `ProfilerTest`, `SqlStatisticProviderTest`, the
+lattice model files, and the handful of cases elsewhere (`JdbcTest`,
+`ModelTest`, `FoodmartTest`) that defined a lattice or a materialization in
+a model. `HrFKUKSchema`, which was nested in `MaterializationTest`, is now a
+class of its own.
 
 Still to do, if wanted: core depends on Avatica (`avatica-core`) for utility
 classes (`ByteString`, `TimeUnit`, `ColumnMetaData`, ...) in about 150 files.
@@ -188,7 +227,7 @@ upstream's improvements and monoql's invariants both intact.
    file under `site/`). Delete them and list them above.
 8. Update `calcite.version` in `gradle.properties`, the version in
    `legacy-jdbc`'s `CalciteDriverVersion`, and "Where we are" above.
-9. `./gradlew build`. At the base that is 19,739 Calcite tests (core,
-   linq4j, testkit) and 185 monoql tests, with no failures. Compare any
+9. `./gradlew build`. At the base that is 19,713 Calcite tests (core,
+   linq4j, testkit) and 232 monoql tests, with no failures. Compare any
    failure against upstream's own results for the tag before assuming the
    merge caused it.

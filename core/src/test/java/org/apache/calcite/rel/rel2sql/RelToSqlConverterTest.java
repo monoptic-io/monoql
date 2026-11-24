@@ -13174,7 +13174,7 @@ class RelToSqlConverterTest {
                         new HepProgramBuilder().addRuleClass(RelOptRule.class)
                             .build()));
             return program.run(p, r, r.getTraitSet(),
-                ImmutableList.of(), ImmutableList.of());
+                ImmutableList.of());
           });
       return new Sql(schemaSpec, sql, dialect, parserConfig, librarySet, config,
           relFn, transforms, convertletTable, roundTrip);

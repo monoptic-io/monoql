@@ -32,7 +32,6 @@ import org.apache.calcite.linq4j.Queryable;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.linq4j.tree.MethodCallExpression;
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelProtoDataType;
@@ -61,7 +60,6 @@ import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import static org.apache.calcite.jdbc.CalciteSchema.LatticeEntry;
 
 import static java.util.Objects.requireNonNull;
 
@@ -345,6 +343,26 @@ public final class Schemas {
     }
   }
 
+  // monoql: upstream analyzed views on a connection it kept for the
+  // purpose, with that connection's (default) configuration and type
+  // factory. This does the same without one.
+  /** Analyzes a view, with the default configuration and no connection. */
+  public static CalcitePrepare.AnalyzeViewResult analyzeView(
+      final CalciteSchema schema, final @Nullable List<String> schemaPath,
+      final String viewSql, @Nullable List<String> viewPath, boolean fail) {
+    final CalcitePrepare prepare = CalcitePrepare.DEFAULT_FACTORY.apply();
+    final CalcitePrepare.Context context =
+        makeContext(CalciteConnectionConfig.DEFAULT,
+            new org.apache.calcite.jdbc.JavaTypeFactoryImpl(),
+            DataContexts.EMPTY, schema, schemaPath, viewPath);
+    CalcitePrepare.Dummy.push(context);
+    try {
+      return prepare.analyzeView(context, viewSql, fail);
+    } finally {
+      CalcitePrepare.Dummy.pop(context);
+    }
+  }
+
   /** Analyzes a view. For use within Calcite only. */
   public static CalcitePrepare.AnalyzeViewResult analyzeView(
       final CalciteConnection connection, final CalciteSchema schema,
@@ -485,47 +503,6 @@ public final class Schemas {
    * factory. */
   public static RelProtoDataType proto(final ScalarFunction function) {
     return function::getReturnType;
-  }
-
-  /** Returns the star tables defined in a schema.
-   *
-   * @param schema Schema */
-  public static List<CalciteSchema.TableEntry> getStarTables(
-      CalciteSchema schema) {
-    final List<CalciteSchema.LatticeEntry> list = getLatticeEntries(schema);
-    return Util.transform(list, entry -> {
-      final CalciteSchema.TableEntry starTable =
-          requireNonNull(entry, "entry").getStarTable();
-      assert starTable.getTable().getJdbcTableType()
-          == Schema.TableType.STAR;
-      return entry.getStarTable();
-    });
-  }
-
-  /** Returns the lattices defined in a schema.
-   *
-   * @param schema Schema */
-  public static List<Lattice> getLattices(CalciteSchema schema) {
-    final List<CalciteSchema.LatticeEntry> list = getLatticeEntries(schema);
-    return Util.transform(list, LatticeEntry::getLattice);
-  }
-
-  /** Returns the lattices defined in a schema.
-   *
-   * @param schema Schema */
-  public static List<CalciteSchema.LatticeEntry> getLatticeEntries(
-      CalciteSchema schema) {
-    final List<LatticeEntry> list = new ArrayList<>();
-    gatherLattices(schema, list);
-    return list;
-  }
-
-  private static void gatherLattices(CalciteSchema schema,
-      List<CalciteSchema.LatticeEntry> list) {
-    list.addAll(schema.getLatticeMap().values());
-    for (CalciteSchema subSchema : schema.getSubSchemaMap().values()) {
-      gatherLattices(subSchema, list);
-    }
   }
 
   /** Returns a sub-schema of a given schema obtained by following a sequence

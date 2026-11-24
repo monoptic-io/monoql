@@ -524,7 +524,7 @@ class PlannerTest {
 
     RelNode output =
         program.run(planner, relNode, toTraits,
-            ImmutableList.of(), ImmutableList.of());
+            ImmutableList.of());
 
     // Expected outcomes are:
     // 1) relation is optimized to simple VALUES
@@ -1495,8 +1495,7 @@ class PlannerTest {
     final RelTraitSet toTraits = relNode.getTraitSet()
         .replace(EnumerableConvention.INSTANCE);
     final RelNode output =
-        program.run(planner, relNode, toTraits, ImmutableList.of(),
-            ImmutableList.of());
+        program.run(planner, relNode, toTraits, ImmutableList.of());
     final String plan = toString(output);
     assertThat(plan,
         equalTo("EnumerableCorrelate(correlation=[$cor0], joinType=[inner], "

@@ -224,14 +224,6 @@ public abstract class AbstractRelOptPlanner implements RelOptPlanner {
     return ImmutableList.of();
   }
 
-  @Override public void addLattice(RelOptLattice lattice) {
-    // ignore - this planner does not support lattices
-  }
-
-  @Override public @Nullable RelOptLattice getLattice(RelOptTable table) {
-    // this planner does not support lattices
-    return null;
-  }
 
   @Override public void registerSchema(RelOptSchema schema) {
   }

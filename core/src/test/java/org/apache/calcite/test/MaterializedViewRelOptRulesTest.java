@@ -56,7 +56,7 @@ class MaterializedViewRelOptRulesTest {
           RelOptUtil.registerDefaultRules(planner, true, false);
           return ImmutableList.of(
               Programs.standard().run(planner, queryRel, traitSet,
-                  materializationList, ImmutableList.of()));
+                  materializationList));
         }
       };
 
@@ -566,7 +566,7 @@ class MaterializedViewRelOptRulesTest {
                 .build();
             final HepPlanner hepPlanner = new HepPlanner(mainProgram);
             final Program program =
-                (planner, rel, requiredOutputTraits, materializations, lattices) -> {
+                (planner, rel, requiredOutputTraits, materializations) -> {
                   for (RelOptMaterialization materialization : materializations) {
                     planner.addMaterialization(materialization);
                   }
@@ -575,7 +575,7 @@ class MaterializedViewRelOptRulesTest {
                 };
             return ImmutableList.of(
                 program.run(hepPlanner, queryRel, queryRel.getCluster().traitSet(),
-                    materializationList, ImmutableList.of()));
+                    materializationList));
           }
         };
 
@@ -1032,7 +1032,7 @@ class MaterializedViewRelOptRulesTest {
                 .build();
             final HepPlanner hepPlanner = new HepPlanner(mainProgram);
             final Program program =
-                (planner, rel, requiredOutputTraits, materializations, lattices) -> {
+                (planner, rel, requiredOutputTraits, materializations) -> {
                   for (RelOptMaterialization materialization : materializations) {
                     planner.addMaterialization(materialization);
                   }
@@ -1041,7 +1041,7 @@ class MaterializedViewRelOptRulesTest {
                 };
             return ImmutableList.of(
                 program.run(hepPlanner, queryRel, queryRel.getCluster().traitSet(),
-                    materializationList, ImmutableList.of()));
+                    materializationList));
           }
         };
 

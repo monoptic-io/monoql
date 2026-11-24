@@ -19,12 +19,10 @@ import java.util.ServiceLoader;
  *
  * <p>The driver is not part of core any more; it lives in the
  * {@code legacy-jdbc} module, which exists to run upstream's tests. A few
- * old features are written in terms of a connection and have not been
- * reworked: materializations and lattices
- * ({@code MaterializationService}), views defined in model files
- * ({@code ViewTableMacro}), and {@code CloneSchema}. They ask here. If
- * {@code legacy-jdbc} is on the class path they get their connection; if
- * not, they fail with an explanation.
+ * things still ask for a connection: a statement prepared through
+ * {@code Frameworks} that wants the connection it runs on, and the old
+ * "metadata" schema. They ask here. If {@code legacy-jdbc} is on the class
+ * path they get it; if not, they fail with an explanation.
  *
  * <p>Nothing in monoql's own path (the catalog API, the engine, the shell)
  * comes through this class. */
@@ -50,7 +48,6 @@ public final class LegacyJdbc {
   /** Loads the provider once, on first use. */
   private static final class Holder {
     static final @Nullable Provider PROVIDER = load();
-    static @Nullable CalciteConnection materializationConnection;
 
     private static @Nullable Provider load() {
       final Iterator<Provider> providers =
@@ -81,19 +78,6 @@ public final class LegacyJdbc {
       @Nullable CalciteSchema rootSchema,
       @Nullable JavaTypeFactory typeFactory) {
     return provider(feature).connect(rootSchema, typeFactory);
-  }
-
-  /** Returns the connection that Calcite's internals share for
-   * materializing views and populating clones. Created on first use. */
-  public static CalciteConnection materializationConnection() {
-    synchronized (Holder.class) {
-      CalciteConnection connection = Holder.materializationConnection;
-      if (connection == null) {
-        connection = provider("Materialization").connect(null, null);
-        Holder.materializationConnection = connection;
-      }
-      return connection;
-    }
   }
 
   /** Returns the old "metadata" schema, or null if the legacy driver is not

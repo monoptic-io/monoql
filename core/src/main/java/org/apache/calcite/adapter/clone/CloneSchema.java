@@ -19,9 +19,9 @@ package org.apache.calcite.adapter.clone;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
 import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.avatica.ColumnMetaData;
-import org.apache.calcite.jdbc.CalciteConnection;
+import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.linq4j.Enumerable;
-import org.apache.calcite.linq4j.QueryProvider;
+import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.Queryable;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollations;
@@ -38,8 +38,6 @@ import org.apache.calcite.schema.lookup.Lookup;
 
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
-
-import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -76,18 +74,17 @@ public class CloneSchema extends AbstractSchema {
       if (table instanceof QueryableTable) {
         final QueryableTable sourceTable = (QueryableTable) table;
         map.put(name,
-            createCloneTable(LegacyJdbc.materializationConnection(), sourceTable, name));
+            createCloneTable(sourceTable, name));
       }
     }
     return map;
   }
 
-  private Table createCloneTable(QueryProvider queryProvider,
-      QueryableTable sourceTable, String name) {
+  // monoql: no connection; the source is read directly.
+  private Table createCloneTable(QueryableTable sourceTable, String name) {
     final Queryable<Object> queryable =
-        sourceTable.asQueryable(queryProvider, sourceSchema, name);
-    final JavaTypeFactory typeFactory =
-        ((CalciteConnection) queryProvider).getTypeFactory();
+        sourceTable.asQueryable(Linq4j.DEFAULT_PROVIDER, sourceSchema, name);
+    final JavaTypeFactory typeFactory = new JavaTypeFactoryImpl();
     return createCloneTable(typeFactory, Schemas.proto(sourceTable),
         ImmutableList.of(), null, queryable);
   }

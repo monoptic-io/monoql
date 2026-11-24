@@ -20,7 +20,6 @@ import org.apache.calcite.DataContext;
 import org.apache.calcite.linq4j.function.Experimental;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.schema.Function;
 import org.apache.calcite.schema.Schema;
@@ -30,8 +29,6 @@ import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.Wrapper;
 import org.apache.calcite.schema.impl.AbstractSchema;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
-import org.apache.calcite.schema.impl.StarTable;
 import org.apache.calcite.schema.lookup.LikePattern;
 import org.apache.calcite.schema.lookup.Lookup;
 import org.apache.calcite.schema.lookup.Named;
@@ -78,7 +75,6 @@ public abstract class CalciteSchema {
   private final LazyReference<Lookup<TableEntry>> tables = new LazyReference<>();
   protected final NameMultimap<FunctionEntry> functionMap;
   protected final NameMap<TypeEntry> typeMap;
-  protected final NameMap<LatticeEntry> latticeMap;
   protected final NameSet functionNames;
   protected final NameMap<FunctionEntry> nullaryFunctionMap;
   protected final NameMap<CalciteSchema> subSchemaMap;
@@ -89,7 +85,6 @@ public abstract class CalciteSchema {
       String name,
       @Nullable NameMap<CalciteSchema> subSchemaMap,
       @Nullable NameMap<TableEntry> tableMap,
-      @Nullable NameMap<LatticeEntry> latticeMap,
       @Nullable NameMap<TypeEntry> typeMap,
       @Nullable NameMultimap<FunctionEntry> functionMap,
       @Nullable NameSet functionNames,
@@ -99,7 +94,6 @@ public abstract class CalciteSchema {
     this.schema = schema;
     this.name = name;
     this.tableMap = tableMap != null ? tableMap : new NameMap<>();
-    this.latticeMap = latticeMap != null ? latticeMap : new NameMap<>();
     this.subSchemaMap = subSchemaMap != null ? subSchemaMap : new NameMap<>();
     if (functionMap == null) {
       this.functionMap = new NameMultimap<>();
@@ -225,52 +219,6 @@ public abstract class CalciteSchema {
     return entry;
   }
 
-  private LatticeEntry add(String name, Lattice lattice) {
-    if (latticeMap.containsKey(name, false)) {
-      throw new RuntimeException("Duplicate lattice '" + name + "'");
-    }
-    final LatticeEntryImpl entry = new LatticeEntryImpl(this, name, lattice);
-    latticeMap.put(name, entry);
-    return entry;
-  }
-
-  public CalciteSchema root() {
-    for (CalciteSchema schema = this;;) {
-      if (schema.parent == null) {
-        return schema;
-      }
-      schema = schema.parent;
-    }
-  }
-
-  /** Returns whether this is a root schema. */
-  public boolean isRoot() {
-    return parent == null;
-  }
-
-  /** Returns the path of an object in this schema. */
-  public List<String> path(@Nullable String name) {
-    final List<String> list = new ArrayList<>();
-    if (name != null) {
-      list.add(name);
-    }
-    for (CalciteSchema s = this; s != null; s = s.parent) {
-      if (s.parent != null || !s.name.equals("")) {
-        // Omit the root schema's name from the path if it's the empty string,
-        // which it usually is.
-        list.add(s.name);
-      }
-    }
-    return ImmutableList.copyOf(list).reverse();
-  }
-
-  public final @Nullable CalciteSchema getSubSchema(String schemaName,
-      boolean caseSensitive) {
-    return caseSensitive
-        ? subSchemas().get(schemaName)
-        : Named.entityOrNull(subSchemas().getIgnoreCase(schemaName));
-  }
-
   /** Adds a child schema of this schema. */
   public abstract CalciteSchema add(String name, Schema schema);
 
@@ -330,11 +278,41 @@ public abstract class CalciteSchema {
     return builder.build();
   }
 
-  /** Returns a collection of lattices.
-   *
-   * <p>All are explicit (defined using {@link #add(String, Lattice)}). */
-  public NavigableMap<String, LatticeEntry> getLatticeMap() {
-    return ImmutableSortedMap.copyOf(latticeMap.map());
+  public CalciteSchema root() {
+    for (CalciteSchema schema = this;;) {
+      if (schema.parent == null) {
+        return schema;
+      }
+      schema = schema.parent;
+    }
+  }
+
+  /** Returns whether this is a root schema. */
+  public boolean isRoot() {
+    return parent == null;
+  }
+
+  /** Returns the path of an object in this schema. */
+  public List<String> path(@Nullable String name) {
+    final List<String> list = new ArrayList<>();
+    if (name != null) {
+      list.add(name);
+    }
+    for (CalciteSchema s = this; s != null; s = s.parent) {
+      if (s.parent != null || !s.name.equals("")) {
+        // Omit the root schema's name from the path if it's the empty string,
+        // which it usually is.
+        list.add(s.name);
+      }
+    }
+    return ImmutableList.copyOf(list).reverse();
+  }
+
+  public final @Nullable CalciteSchema getSubSchema(String schemaName,
+      boolean caseSensitive) {
+    return caseSensitive
+        ? subSchemas().get(schemaName)
+        : Named.entityOrNull(subSchemas().getIgnoreCase(schemaName));
   }
 
   /** Returns the set of all table names. Includes implicit and explicit tables
@@ -438,8 +416,8 @@ public abstract class CalciteSchema {
    * Snapshots of explicit sub schemas will be created and copied recursively.
    *
    * <p>Currently, to accommodate the requirement of creating tables on the fly
-   * for materializations, the snapshot will still use the same table map and
-   * lattice map as in the original CalciteSchema instead of making copies.
+   * the snapshot will still use the same table map
+   * as in the original CalciteSchema instead of making copies.
    *
    * @param version The current schema version
    *
@@ -621,21 +599,6 @@ public abstract class CalciteSchema {
     }
 
     public abstract Function getFunction();
-
-    /** Whether this represents a materialized view. (At a given point in time,
-     * it may or may not be materialized as a table.) */
-    public abstract boolean isMaterialization();
-  }
-
-  /** Membership of a lattice in a schema. */
-  public abstract static class LatticeEntry extends Entry {
-    protected LatticeEntry(CalciteSchema schema, String name) {
-      super(schema, name);
-    }
-
-    public abstract Lattice getLattice();
-
-    public abstract TableEntry getStarTable();
   }
 
   /** Implementation of {@link SchemaPlus} based on a
@@ -755,10 +718,6 @@ public abstract class CalciteSchema {
     @Override public void add(String name, RelProtoDataType type) {
       CalciteSchema.this.add(name, type);
     }
-
-    @Override public void add(String name, Lattice lattice) {
-      CalciteSchema.this.add(name, lattice);
-    }
   }
 
   /**
@@ -815,39 +774,5 @@ public abstract class CalciteSchema {
     @Override public Function getFunction() {
       return function;
     }
-
-    @Override public boolean isMaterialization() {
-      return function
-          instanceof MaterializedViewTable.MaterializedViewTableMacro;
-    }
   }
-
-  /**
-   * Implementation of {@link LatticeEntry}
-   * where all properties are held in fields.
-   */
-  public static class LatticeEntryImpl extends LatticeEntry {
-    private final Lattice lattice;
-    private final CalciteSchema.TableEntry starTableEntry;
-
-    /** Creates a LatticeEntryImpl. */
-    public LatticeEntryImpl(CalciteSchema schema, String name,
-        Lattice lattice) {
-      super(schema, name);
-      this.lattice = lattice;
-
-      // Star table has same name as lattice and is in same schema.
-      final StarTable starTable = lattice.createStarTable();
-      starTableEntry = schema.add(name, starTable);
-    }
-
-    @Override public Lattice getLattice() {
-      return lattice;
-    }
-
-    @Override public TableEntry getStarTable() {
-      return starTableEntry;
-    }
-  }
-
 }

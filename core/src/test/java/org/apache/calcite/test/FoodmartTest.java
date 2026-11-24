@@ -41,7 +41,6 @@ import java.util.stream.Stream;
 class FoodmartTest {
 
   private static CalciteAssert.AssertThat assertFoodmart;
-  private static CalciteAssert.AssertThat assertFoodmartLattice;
 
   private static final int[] DISABLED_IDS = {
       58, 83, 202, 204, 205, 206, 207, 209, 211, 231, 247, 275, 309, 383, 384,
@@ -105,15 +104,11 @@ class FoodmartTest {
     assertFoodmart = CalciteAssert.that()
       .with(CalciteAssert.Config.FOODMART_CLONE)
       .pooled();
-    assertFoodmartLattice = CalciteAssert.that()
-      .with(CalciteAssert.Config.JDBC_FOODMART_WITH_LATTICE)
-      .pooled();
   }
 
   @AfterAll
   public static void tearDownAsserts() {
     assertFoodmart = null;
-    assertFoodmartLattice = null;
   }
 
   // 202 and others: strip away "CAST(the_year AS UNSIGNED) = 1997"
@@ -154,18 +149,4 @@ class FoodmartTest {
       assertFoodmart.query(query.sql).runs();
     });
   }
-
-  @ParameterizedTest(name = "{0}")
-  @Disabled
-  @MethodSource("queries")
-  public void testWithLattice(FoodMartQuerySet.FoodmartQuery query) {
-    Assertions.assertTimeoutPreemptively(Duration.ofMinutes(2), () -> {
-      assertFoodmartLattice
-        .withDefaultSchema("foodmart")
-        .query(query.sql)
-        .enableMaterializations(true)
-        .runs();
-    });
-  }
-
 }

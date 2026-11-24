@@ -113,6 +113,18 @@ public class JsonView extends JsonTable {
   /** Returns the SQL query as a string, concatenating a list of lines if
    * necessary. */
   public String getSql() {
-    return JsonLattice.toString(sql);
+    // monoql: was JsonLattice.toString.
+    if (sql instanceof String) {
+      return (String) sql;
+    }
+    final java.util.StringJoiner buf = new java.util.StringJoiner("\n", "", "\n");
+    for (Object o : (List<?>) sql) {
+      if (!(o instanceof String)) {
+        throw new RuntimeException(
+            "each element of a string list must be a string; found: " + o);
+      }
+      buf.add((String) o);
+    }
+    return buf.toString();
   }
 }

@@ -21,9 +21,7 @@ import org.apache.calcite.adapter.java.JavaTypeFactory;
 import org.apache.calcite.avatica.Meta;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.CalciteSchema;
-import org.apache.calcite.jdbc.CalciteSchema.LatticeEntry;
 import org.apache.calcite.plan.Convention;
-import org.apache.calcite.plan.RelOptLattice;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptSchema;
@@ -45,7 +43,6 @@ import org.apache.calcite.schema.ExtensibleTable;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.Wrapper;
 import org.apache.calcite.schema.impl.ModifiableViewTable;
-import org.apache.calcite.schema.impl.StarTable;
 import org.apache.calcite.sql.SqlExplain;
 import org.apache.calcite.sql.SqlExplainFormat;
 import org.apache.calcite.sql.SqlExplainLevel;
@@ -136,47 +133,21 @@ public abstract class Prepare {
    * Optimizes a query plan.
    *
    * @param root Root of relational expression tree
-   * @param materializations Tables known to be populated with a given query
-   * @param lattices Lattices
    * @return an equivalent optimized relational expression
    */
-  protected RelRoot optimize(RelRoot root,
-      final List<Materialization> materializations,
-      final List<CalciteSchema.LatticeEntry> lattices) {
+  // monoql: no materializations or lattices; they came from
+  // MaterializationService, which needed a connection.
+  protected RelRoot optimize(RelRoot root) {
     final RelOptPlanner planner = root.rel.getCluster().getPlanner();
 
     final DataContext dataContext = context.getDataContext();
     planner.setExecutor(new RexExecutorImpl(dataContext));
 
-    final List<RelOptMaterialization> materializationList =
-        new ArrayList<>(materializations.size());
-    for (Materialization materialization : materializations) {
-      List<String> qualifiedTableName = materialization.materializedTable.path();
-      materializationList.add(
-          new RelOptMaterialization(
-              castNonNull(materialization.tableRel),
-              castNonNull(materialization.queryRel),
-              materialization.starRelOptTable,
-              qualifiedTableName));
-    }
-
-    final List<RelOptLattice> latticeList = new ArrayList<>(lattices.size());
-    for (CalciteSchema.LatticeEntry lattice : lattices) {
-      final CalciteSchema.TableEntry starTable = lattice.getStarTable();
-      final JavaTypeFactory typeFactory = context.getTypeFactory();
-      final RelOptTableImpl starRelOptTable =
-          RelOptTableImpl.create(catalogReader,
-              starTable.getTable().getRowType(typeFactory), starTable, null);
-      latticeList.add(
-          new RelOptLattice(lattice.getLattice(), starRelOptTable));
-    }
-
     final RelTraitSet desiredTraits = getDesiredRootTraitSet(root);
 
     final Program program = getProgram();
     final RelNode rootRel4 =
-        program.run(planner, root.rel, desiredTraits, materializationList,
-            latticeList);
+        program.run(planner, root.rel, desiredTraits, ImmutableList.of());
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("Plan after physical tweaks:\n{}",
           RelOptUtil.toString(rootRel4, SqlExplainLevel.ALL_ATTRIBUTES));
@@ -322,13 +293,13 @@ public abstract class Prepare {
       switch (sqlExplain.getDepth()) {
       case PHYSICAL:
       default:
-        root = optimize(root, getMaterializations(), getLattices());
+        root = optimize(root);
         return createPreparedExplanation(null, parameterRowType, root,
             sqlExplain.getFormat(), sqlExplain.getDetailLevel());
       }
     }
 
-    root = optimize(root, getMaterializations(), getLattices());
+    root = optimize(root);
 
     if (timingTracer != null) {
       timingTracer.traceTime("end optimization");
@@ -377,10 +348,6 @@ public abstract class Prepare {
 
   protected abstract RelNode decorrelate(SqlToRelConverter sqlToRelConverter,
       SqlNode query, RelNode rootRel);
-
-  protected abstract List<Materialization> getMaterializations();
-
-  protected abstract List<LatticeEntry> getLattices();
 
   /**
    * Walks over a tree of relational expressions, replacing each
@@ -646,40 +613,6 @@ public abstract class Prepare {
 
     public RelNode getRootRel() {
       return rootRel;
-    }
-  }
-
-  /** Describes that a given SQL query is materialized by a given table.
-   * The materialization is currently valid, and can be used in the planning
-   * process. */
-  public static class Materialization {
-    /** The table that holds the materialized data. */
-    final CalciteSchema.TableEntry materializedTable;
-    /** The query that derives the data. */
-    final String sql;
-    /** The schema path for the query. */
-    final List<String> viewSchemaPath;
-    /** Relational expression for the table. Usually a
-     * {@link org.apache.calcite.rel.logical.LogicalTableScan}. */
-    @Nullable RelNode tableRel;
-    /** Relational expression for the query to populate the table. */
-    @Nullable RelNode queryRel;
-    /** Star table identified. */
-    private @Nullable RelOptTable starRelOptTable;
-
-    public Materialization(CalciteSchema.TableEntry materializedTable,
-        String sql, List<String> viewSchemaPath) {
-      this.materializedTable =
-          requireNonNull(materializedTable, "materializedTable");
-      this.sql = requireNonNull(sql, "sql");
-      this.viewSchemaPath = viewSchemaPath;
-    }
-
-    public void materialize(RelNode queryRel,
-        RelOptTable starRelOptTable) {
-      this.queryRel = queryRel;
-      this.starRelOptTable = starRelOptTable;
-      assert starRelOptTable.maybeUnwrap(StarTable.class).isPresent();
     }
   }
 }

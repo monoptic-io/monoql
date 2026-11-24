@@ -19,7 +19,6 @@ package org.apache.calcite.test.enumerable;
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
 import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.config.Lex;
-import org.apache.calcite.plan.RelOptLattice;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelTraitSet;
@@ -483,8 +482,7 @@ class EnumerableHashJoinTest {
             DefaultRelMetadataProvider.INSTANCE);
     Program topDownDecorrelator = new Program() {
       @Override public RelNode run(RelOptPlanner planner, RelNode rel,
-          RelTraitSet requiredOutputTraits, List<RelOptMaterialization> materializations,
-          List<RelOptLattice> lattices) {
+          RelTraitSet requiredOutputTraits, List<RelOptMaterialization> materializations) {
         final RelBuilder relBuilder =
             RelFactories.LOGICAL_BUILDER.create(rel.getCluster(), null);
         return TopDownGeneralDecorrelator.decorrelateQuery(rel, relBuilder);

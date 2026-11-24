@@ -78,7 +78,7 @@ public interface RelOptPlanner {
 
   /**
    * Removes all internal state, including all registered rules,
-   * materialized views, and lattices.
+   * and materialized views.
    */
   void clear();
 
@@ -178,18 +178,6 @@ public interface RelOptPlanner {
    */
   List<RelOptMaterialization> getMaterializations();
 
-  /**
-   * Defines a lattice.
-   *
-   * <p>The lattice may have materializations; it is not necessary to call
-   * {@link #addMaterialization} for these; they are registered implicitly.
-   */
-  void addLattice(RelOptLattice lattice);
-
-  /**
-   * Retrieves a lattice, given its star table.
-   */
-  @Nullable RelOptLattice getLattice(RelOptTable table);
 
   /**
    * Finds the most efficient expression to implement this query.

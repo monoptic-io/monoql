@@ -17,7 +17,6 @@
 package org.apache.calcite.tools;
 
 import org.apache.calcite.jdbc.CalciteSchema;
-import org.apache.calcite.materialize.SqlStatisticProvider;
 import org.apache.calcite.plan.Context;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.RelOptCluster;
@@ -37,7 +36,6 @@ import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql2rel.SqlRexConvertletTable;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
 import org.apache.calcite.sql2rel.StandardConvertletTable;
-import org.apache.calcite.statistic.QuerySqlStatisticProvider;
 import org.apache.calcite.util.Util;
 
 import com.google.common.collect.ImmutableList;
@@ -215,8 +213,6 @@ public class Frameworks {
     private @Nullable RexExecutor executor;
     private @Nullable RelOptCostFactory costFactory;
     private RelDataTypeSystem typeSystem;
-    private boolean evolveLattice;
-    private SqlStatisticProvider statisticProvider;
     private RelOptTable.@Nullable ViewExpander viewExpander;
 
     /** Creates a ConfigBuilder, initializing to defaults. */
@@ -229,8 +225,6 @@ public class Frameworks {
       sqlValidatorConfig = SqlValidator.Config.DEFAULT;
       sqlToRelConverterConfig = SqlToRelConverter.config();
       typeSystem = RelDataTypeSystem.DEFAULT;
-      evolveLattice = false;
-      statisticProvider = QuerySqlStatisticProvider.SILENT_CACHING_INSTANCE;
     }
 
     /** Creates a ConfigBuilder, initializing from an existing config. */
@@ -247,15 +241,12 @@ public class Frameworks {
       executor = config.getExecutor();
       costFactory = config.getCostFactory();
       typeSystem = config.getTypeSystem();
-      evolveLattice = config.isEvolveLattice();
-      statisticProvider = config.getStatisticProvider();
     }
 
     public FrameworkConfig build() {
       return new StdFrameworkConfig(context, convertletTable, operatorTable,
           programs, traitDefs, parserConfig, sqlValidatorConfig, sqlToRelConverterConfig,
-          defaultSchema, costFactory, typeSystem, executor, evolveLattice,
-          statisticProvider, viewExpander);
+          defaultSchema, costFactory, typeSystem, executor, viewExpander);
     }
 
     public ConfigBuilder context(Context c) {
@@ -344,18 +335,6 @@ public class Frameworks {
       return this;
     }
 
-    public ConfigBuilder evolveLattice(boolean evolveLattice) {
-      this.evolveLattice = evolveLattice;
-      return this;
-    }
-
-    public ConfigBuilder statisticProvider(
-        SqlStatisticProvider statisticProvider) {
-      this.statisticProvider =
-          requireNonNull(statisticProvider, "statisticProvider");
-      return this;
-    }
-
     public ConfigBuilder viewExpander(RelOptTable.ViewExpander viewExpander) {
       this.viewExpander = viewExpander;
       return this;
@@ -379,8 +358,6 @@ public class Frameworks {
     private final @Nullable RelOptCostFactory costFactory;
     private final RelDataTypeSystem typeSystem;
     private final @Nullable RexExecutor executor;
-    private final boolean evolveLattice;
-    private final SqlStatisticProvider statisticProvider;
     private final RelOptTable.@Nullable ViewExpander viewExpander;
 
     StdFrameworkConfig(Context context,
@@ -395,8 +372,6 @@ public class Frameworks {
         @Nullable RelOptCostFactory costFactory,
         RelDataTypeSystem typeSystem,
         @Nullable RexExecutor executor,
-        boolean evolveLattice,
-        SqlStatisticProvider statisticProvider,
         RelOptTable.@Nullable ViewExpander viewExpander) {
       this.context = context;
       this.convertletTable = convertletTable;
@@ -410,8 +385,6 @@ public class Frameworks {
       this.costFactory = costFactory;
       this.typeSystem = typeSystem;
       this.executor = executor;
-      this.evolveLattice = evolveLattice;
-      this.statisticProvider = statisticProvider;
       this.viewExpander = viewExpander;
     }
 
@@ -461,14 +434,6 @@ public class Frameworks {
 
     @Override public RelDataTypeSystem getTypeSystem() {
       return typeSystem;
-    }
-
-    @Override public boolean isEvolveLattice() {
-      return evolveLattice;
-    }
-
-    @Override public SqlStatisticProvider getStatisticProvider() {
-      return statisticProvider;
     }
 
     @Override public RelOptTable.@Nullable ViewExpander getViewExpander() {

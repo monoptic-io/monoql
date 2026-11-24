@@ -2384,7 +2384,7 @@ class RelOptRulesTest extends RelOptTestBase {
 
     RelNode relAfter =
         program.run(fixture.planner, rel, toTraits,
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     String planAfter = NL + RelOptUtil.toString(relAfter);
     diffRepos.assertEquals("planAfter", "${planAfter}", planAfter);
@@ -9853,7 +9853,7 @@ class RelOptRulesTest extends RelOptTestBase {
               r.getCluster().traitSet()
                   .replace(0, EnumerableConvention.INSTANCE);
           return program.run(fixture.planner, r, toTraits,
-              ImmutableList.of(), ImmutableList.of());
+              ImmutableList.of());
         })
         .check();
   }

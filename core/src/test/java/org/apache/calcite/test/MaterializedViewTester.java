@@ -21,7 +21,6 @@ import org.apache.calcite.adapter.enumerable.EnumerableTableScan;
 import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
-import org.apache.calcite.materialize.MaterializationService;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptUtil;
@@ -111,7 +110,7 @@ public abstract class MaterializedViewTester {
         if (f.schemaSpec == null) {
           defaultSchema =
               rootSchema.add("hr",
-                  new ReflectiveSchemaWithoutRowCount(new MaterializationTest.HrFKUKSchema()));
+                  new ReflectiveSchemaWithoutRowCount(new HrFKUKSchema()));
         } else {
           defaultSchema = CalciteAssert.addSchema(rootSchema, f.schemaSpec);
         }
@@ -119,13 +118,11 @@ public abstract class MaterializedViewTester {
         final List<RelOptMaterialization> mvs = new ArrayList<>();
         final RelBuilder relBuilder =
             RelFactories.LOGICAL_BUILDER.create(cluster, relOptSchema);
-        final MaterializationService.DefaultTableFactory tableFactory =
-            new MaterializationService.DefaultTableFactory();
         for (Pair<String, String> pair : f.materializationList) {
           String sql = pair.left;
           final RelNode mvRel = toRel(cluster, rootSchema, defaultSchema, sql);
           final Table table =
-              tableFactory.createTable(CalciteSchema.from(rootSchema),
+              createTable(CalciteSchema.from(rootSchema),
                   sql, ImmutableList.of(defaultSchema.getName()));
           String name = pair.right;
           defaultSchema.add(name, table);
@@ -134,7 +131,7 @@ public abstract class MaterializedViewTester {
           final EnumerableTableScan replacement =
               EnumerableTableScan.create(cluster, logicalScan.getTable());
           mvs.add(
-              new RelOptMaterialization(replacement, mvRel, null,
+              new RelOptMaterialization(replacement, mvRel,
                   ImmutableList.of(defaultSchema.getName(), name)));
         }
         return new TestConfig(defaultSchema.getName(), queryRel, mvs);
@@ -142,6 +139,58 @@ public abstract class MaterializedViewTester {
         throw TestUtil.rethrow(e);
       }
     });
+  }
+
+  // monoql: was MaterializationService.DefaultTableFactory, which is gone
+  // from core. A test may use the driver.
+  /** Runs a query and returns its rows as a table. */
+  private static Table createTable(CalciteSchema schema, String viewSql,
+      List<String> viewSchemaPath) {
+    final org.apache.calcite.jdbc.CalciteConnection connection =
+        io.monoptic.monoql.calcite.LegacyJdbc.connect("Materialization",
+            schema.root(), null);
+    final org.apache.calcite.jdbc.CalcitePrepare.CalciteSignature<Object>
+        signature =
+        org.apache.calcite.schema.Schemas.prepare(connection, schema,
+            viewSchemaPath, viewSql,
+            com.google.common.collect.ImmutableMap.of());
+    final java.util.function.Supplier<org.apache.calcite.linq4j.Enumerable<Object>>
+        rows = () ->
+            signature.enumerable(
+                DataContexts.of(connection,
+                    java.util.Objects.requireNonNull(signature.rootSchema)
+                        .plus()));
+    return org.apache.calcite.adapter.clone.CloneSchema.createCloneTable(
+        connection.getTypeFactory(),
+        org.apache.calcite.rel.type.RelDataTypeImpl.proto(
+            java.util.Objects.requireNonNull(signature.rowType)),
+        signature.getCollationList(),
+        org.apache.calcite.util.Util.transform(signature.columns,
+            column -> column.type.rep),
+        new org.apache.calcite.linq4j.AbstractQueryable<Object>() {
+          @Override public org.apache.calcite.linq4j.Enumerator<Object>
+              enumerator() {
+            return rows.get().enumerator();
+          }
+
+          @Override public java.lang.reflect.Type getElementType() {
+            return Object.class;
+          }
+
+          @Override public org.apache.calcite.linq4j.tree.Expression
+              getExpression() {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override public org.apache.calcite.linq4j.QueryProvider
+              getProvider() {
+            return connection;
+          }
+
+          @Override public java.util.Iterator<Object> iterator() {
+            return rows.get().iterator();
+          }
+        });
   }
 
   private RelNode toRel(RelOptCluster cluster, SchemaPlus rootSchema,

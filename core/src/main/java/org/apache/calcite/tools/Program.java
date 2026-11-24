@@ -16,7 +16,6 @@
  */
 package org.apache.calcite.tools;
 
-import org.apache.calcite.plan.RelOptLattice;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelTraitSet;
@@ -37,6 +36,5 @@ import java.util.List;
 public interface Program {
   RelNode run(RelOptPlanner planner, RelNode rel,
       RelTraitSet requiredOutputTraits,
-      List<RelOptMaterialization> materializations,
-      List<RelOptLattice> lattices);
+      List<RelOptMaterialization> materializations);
 }

@@ -17,7 +17,6 @@
 package org.apache.calcite.schema.impl;
 
 import org.apache.calcite.adapter.java.JavaTypeFactory;
-import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.rel.type.RelDataTypeImpl;
@@ -27,8 +26,6 @@ import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.TranslatableTable;
 
 import com.google.common.collect.ImmutableList;
-
-import io.monoptic.monoql.calcite.LegacyJdbc;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -75,10 +72,9 @@ public class ViewTableMacro implements TableMacro {
   }
 
   @Override public TranslatableTable apply(List<? extends @Nullable Object> arguments) {
-    final CalciteConnection connection =
-        LegacyJdbc.materializationConnection();
+    // monoql: no connection.
     CalcitePrepare.AnalyzeViewResult parsed =
-        Schemas.analyzeView(connection, schema, schemaPath, viewSql, viewPath,
+        Schemas.analyzeView(schema, schemaPath, viewSql, viewPath,
             modifiable != null && modifiable);
     final List<String> schemaPath1 =
         schemaPath != null ? schemaPath : schema.path(null);

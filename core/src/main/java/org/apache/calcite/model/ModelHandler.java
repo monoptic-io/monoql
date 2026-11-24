@@ -21,7 +21,6 @@ import org.apache.calcite.avatica.AvaticaUtils;
 import org.apache.calcite.config.CalciteSystemProperty;
 import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.jdbc.CalciteSchema;
-import org.apache.calcite.materialize.Lattice;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.schema.AggregateFunction;
@@ -36,7 +35,6 @@ import org.apache.calcite.schema.TableFunction;
 import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.AggregateFunctionImpl;
-import org.apache.calcite.schema.impl.MaterializedViewTable;
 import org.apache.calcite.schema.impl.ScalarFunctionImpl;
 import org.apache.calcite.schema.impl.TableFunctionImpl;
 import org.apache.calcite.schema.impl.TableMacroImpl;
@@ -94,8 +92,6 @@ public class ModelHandler {
       new ArrayDeque<>();
   private final String modelUri;
   private final ClassNameFilter classNameFilter;
-  Lattice.@Nullable Builder latticeBuilder;
-  Lattice.@Nullable TileBuilder tileBuilder;
 
   /** Creates a {@code ModelHandler} that uses the
    * {@linkplain ClassNameFilter#standard() standard} class-name filter. */
@@ -446,74 +442,6 @@ public class ModelHandler {
     populateSchema(jsonSchema, schemaPlus);
   }
 
-  public void visit(JsonMaterialization jsonMaterialization) {
-    try {
-      final SchemaPlus schema = currentSchema();
-      if (!schema.isMutable()) {
-        throw new RuntimeException(
-            "Cannot define materialization; parent schema '"
-                + currentSchemaName()
-                + "' is not a SemiMutableSchema");
-      }
-      CalciteSchema calciteSchema = CalciteSchema.from(schema);
-
-      final String viewName;
-      final boolean existing;
-      if (jsonMaterialization.view == null) {
-        // If the user did not supply a view name, that means the materialized
-        // view is pre-populated. Generate a synthetic view name.
-        viewName = "$" + schema.tables().getNames(LikePattern.any()).size();
-        existing = true;
-      } else {
-        viewName = jsonMaterialization.view;
-        existing = false;
-      }
-      List<String> viewPath = calciteSchema.path(viewName);
-      schema.add(viewName,
-          MaterializedViewTable.create(calciteSchema,
-              jsonMaterialization.getSql(), jsonMaterialization.viewSchemaPath, viewPath,
-              jsonMaterialization.table, existing));
-    } catch (Exception e) {
-      throw new RuntimeException("Error instantiating " + jsonMaterialization,
-          e);
-    }
-  }
-
-  public void visit(JsonLattice jsonLattice) {
-    try {
-      final SchemaPlus schema = currentSchema();
-      if (!schema.isMutable()) {
-        throw new RuntimeException("Cannot define lattice; parent schema '"
-            + currentSchemaName()
-            + "' is not a SemiMutableSchema");
-      }
-      CalciteSchema calciteSchema = CalciteSchema.from(schema);
-      Lattice.Builder latticeBuilder =
-          Lattice.builder(calciteSchema, jsonLattice.getSql())
-              .auto(jsonLattice.auto)
-              .algorithm(jsonLattice.algorithm);
-      if (jsonLattice.rowCountEstimate != null) {
-        latticeBuilder.rowCountEstimate(jsonLattice.rowCountEstimate);
-      }
-      if (jsonLattice.statisticProvider != null) {
-        classNameFilter.check(jsonLattice.statisticProvider);
-        latticeBuilder.statisticProvider(jsonLattice.statisticProvider);
-      }
-      populateLattice(jsonLattice, latticeBuilder);
-      schema.add(jsonLattice.name, latticeBuilder.build());
-    } catch (Exception e) {
-      throw new RuntimeException("Error instantiating " + jsonLattice, e);
-    }
-  }
-
-  private void populateLattice(JsonLattice jsonLattice,
-      Lattice.Builder latticeBuilder) {
-    assert this.latticeBuilder == null;
-    this.latticeBuilder = latticeBuilder;
-    jsonLattice.visitChildren(this);
-    this.latticeBuilder = null;
-  }
-
   public void visit(JsonCustomTable jsonTable) {
     try {
       final SchemaPlus schema = currentMutableSchema("table");
@@ -620,36 +548,6 @@ public class ModelHandler {
     } catch (Exception e) {
       throw new RuntimeException("Error instantiating " + jsonFunction, e);
     }
-  }
-
-  public void visit(JsonMeasure jsonMeasure) {
-    requireNonNull(latticeBuilder, "latticeBuilder");
-    final boolean distinct = false; // no distinct field in JsonMeasure.yet
-    final Lattice.Measure measure =
-        latticeBuilder.resolveMeasure(jsonMeasure.agg, distinct,
-            jsonMeasure.args);
-    if (tileBuilder != null) {
-      tileBuilder.addMeasure(measure);
-    } else if (latticeBuilder != null) {
-      latticeBuilder.addMeasure(measure);
-    } else {
-      throw new AssertionError("nowhere to put measure");
-    }
-  }
-
-  public void visit(JsonTile jsonTile) {
-    assert tileBuilder == null;
-    Lattice.TileBuilder tileBuilder = this.tileBuilder = Lattice.Tile.builder();
-    for (JsonMeasure jsonMeasure : jsonTile.measures) {
-      jsonMeasure.accept(this);
-    }
-    Lattice.Builder latticeBuilder = requireNonNull(this.latticeBuilder, "latticeBuilder");
-    for (Object dimension : jsonTile.dimensions) {
-      final Lattice.Column column = latticeBuilder.resolveColumn(dimension);
-      tileBuilder.addDimension(column);
-    }
-    latticeBuilder.addTile(tileBuilder.build());
-    this.tileBuilder = null;
   }
 
   /** Extra operands automatically injected into a

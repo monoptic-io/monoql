@@ -244,7 +244,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     // before fix:
     //
@@ -339,7 +339,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0], A=[$3])\n"
         + "  LogicalCorrelate(correlation=[$cor0], joinType=[left], requiredColumns=[{0}])\n"
@@ -412,7 +412,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$7])\n"
         + "  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])\n"
@@ -499,7 +499,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalSort(sort0=[$0], dir0=[ASC])\n"
         + "  LogicalProject(DNAME=[$1], C=[$3])\n"
@@ -627,7 +627,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalCorrelate(correlation=[$cor1], joinType=[left], requiredColumns=[{0}])\n"
         + "  LogicalTableScan(table=[[scott, DEPT]])\n"
@@ -733,7 +733,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalSort(sort0=[$0], dir0=[ASC])\n"
         + "  LogicalProject(ENAME=[$1], CORRELATED_SUM=[$8])\n"
@@ -821,7 +821,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalSort(sort0=[$0], dir0=[ASC])\n"
         + "  LogicalProject(ENAME=[$1], CORRELATED_SUM=[$8])\n"
@@ -915,7 +915,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DNAME=[$1])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1038,7 +1038,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DNAME=[$1])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1153,7 +1153,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(EXPR$0=[1])\n"
         + "  LogicalProject(DEPTNO=[$0], TOTAL=[$1])\n"
@@ -1223,7 +1223,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode original =
         program.run(cluster.getPlanner(), parsedRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planOriginal = ""
         + "LogicalProject(EXPR$0=[ROW($8, $1)])\n"
         + "  LogicalCorrelate(correlation=[$cor0], joinType=[left], requiredColumns=[{7}])\n"
@@ -1306,7 +1306,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DNAME=[$1])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1377,7 +1377,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalSort(offset=[1], fetch=[2])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1443,7 +1443,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1510,7 +1510,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$7])\n"
         + "  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])\n"
@@ -1579,7 +1579,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])\n"
         + "  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])\n"
@@ -1655,7 +1655,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(A=[$0], B=[$1], C=[$2])\n"
         + "  LogicalProject(EXPR$0=[$0], EXPR$1=[$1], EXPR$2=[$2])\n"
@@ -1743,7 +1743,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DNAME=[$1], MATCHED_SUBORDINATE_COUNT=[$3])\n"
         + "  LogicalCorrelate(correlation=[$cor0], joinType=[left], requiredColumns=[{0}])\n"
@@ -1834,7 +1834,7 @@ public class RelDecorrelatorTest {
         Programs.of(hepProgram, true, requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     return RelDecorrelator.decorrelateQuery(before, builder,
         RuleSets.ofList(Collections.emptyList()), RuleSets.ofList(Collections.emptyList()));
   }
@@ -1875,7 +1875,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2])\n"
@@ -1951,7 +1951,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0], I0=[$3], I1=[$4])\n"
         + "  LogicalCorrelate(correlation=[$cor0], joinType=[left], requiredColumns=[{0}])\n"
@@ -2045,7 +2045,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0], EXPR$1=[$3])\n"
         + "  LogicalCorrelate(correlation=[$cor0], joinType=[left], requiredColumns=[{0}])\n"
@@ -2119,7 +2119,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
     final String planBefore = ""
         + "LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2], EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO0=[$10])\n"
         + "  LogicalProject(DEPTNO=[$0], DNAME=[$1], LOC=[$2], EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO0=[$10])\n"
@@ -2193,7 +2193,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterFilterIntoJoin =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterFilterIntoJoin = "LogicalProject(EMPNO=[$0], DNAME=[$9], ENAME=[$11])\n"
         + "  LogicalJoin(condition=[AND(=($1, $11), IN($12, {\n"
@@ -2217,7 +2217,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterJoinSubqueryCorrelate =
         program1.run(cluster.getPlanner(), afterFilterIntoJoin, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterJoinSubqueryCorrelate =
         "LogicalProject(EMPNO=[$0], DNAME=[$9], ENAME=[$11])\n"
@@ -2296,7 +2296,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterFilterIntoJoin =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterFilterIntoJoin = "LogicalProject(EMPNO=[$0], DNAME=[$9], ENAME=[$11])\n"
         + "  LogicalJoin(condition=[AND(=($1, $11), EXISTS({\n"
@@ -2319,7 +2319,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterJoinSubqueryCorrelate =
         program1.run(cluster.getPlanner(), afterFilterIntoJoin, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterJoinSubqueryCorrelate =
         "LogicalProject(EMPNO=[$0], DNAME=[$9], ENAME=[$11])\n"
@@ -2394,7 +2394,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterJoinConditionPush =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterJoinConditionPush = "LogicalProject(EMPNO=[$0])\n"
         + "  LogicalCorrelate(correlation=[$cor1], joinType=[inner], requiredColumns=[{1}])\n"
@@ -2416,7 +2416,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode afterJoinSubqueryCorrelate =
         program1.run(cluster.getPlanner(), afterJoinConditionPush, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     final String planAfterJoinSubqueryCorrelate = "LogicalProject(EMPNO=[$0])\n"
         + "  LogicalCorrelate(correlation=[$cor1], joinType=[inner], requiredColumns=[{1}])\n"
@@ -2499,7 +2499,7 @@ public class RelDecorrelatorTest {
             requireNonNull(cluster.getMetadataProvider()));
     final RelNode before =
         program.run(cluster.getPlanner(), originalRel, cluster.traitSet(),
-            Collections.emptyList(), Collections.emptyList());
+            Collections.emptyList());
 
     // Before the fix, decorrelateQuery would throw:
     // java.lang.IndexOutOfBoundsException: index out of range: 0

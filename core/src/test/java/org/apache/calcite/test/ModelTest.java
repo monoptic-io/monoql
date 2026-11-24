@@ -20,7 +20,6 @@ import org.apache.calcite.model.JsonColumn;
 import org.apache.calcite.model.JsonCustomSchema;
 import org.apache.calcite.model.JsonCustomTable;
 import org.apache.calcite.model.JsonJdbcSchema;
-import org.apache.calcite.model.JsonLattice;
 import org.apache.calcite.model.JsonMapSchema;
 import org.apache.calcite.model.JsonRoot;
 import org.apache.calcite.model.JsonTable;
@@ -193,39 +192,6 @@ class ModelTest {
     assertThat(table1.operand, anEmptyMap());
   }
 
-  /** Tests that an immutable schema in a model cannot contain a
-   * materialization. */
-  @Test void testModelImmutableSchemaCannotContainMaterialization() {
-    CalciteAssert.model("{\n"
-        + "  version: '1.0',\n"
-        + "  defaultSchema: 'adhoc',\n"
-        + "  schemas: [\n"
-        + "    {\n"
-        + "      name: 'empty'\n"
-        + "    },\n"
-        + "    {\n"
-        + "      name: 'adhoc',\n"
-        + "      type: 'custom',\n"
-        + "      factory: '"
-        + JdbcTest.MySchemaFactory.class.getName()
-        + "',\n"
-        + "      operand: {\n"
-        + "           'tableName': 'ELVIS',\n"
-        + "           'mutable': false\n"
-        + "      },\n"
-        + "      materializations: [\n"
-        + "        {\n"
-        + "          table: 'v',\n"
-        + "          sql: 'values (1)'\n"
-        + "        }\n"
-        + "      ]\n"
-        + "    }\n"
-        + "  ]\n"
-        + "}")
-        .connectThrows("Cannot define materialization; parent schema 'adhoc' "
-            + "is not a SemiMutableSchema");
-  }
-
   /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-1899">[CALCITE-1899]
    * When reading model, give error if mandatory JSON attributes are
@@ -257,8 +223,9 @@ class ModelTest {
         .connectThrows("Missing required creator property 'factory'");
   }
 
-  /** Tests a model containing a lattice and some views. */
-  @Test void testReadLattice() throws IOException {
+  // monoql: was testReadLattice; lattices are gone.
+  /** Tests a model containing some views. */
+  @Test void testReadViews() throws IOException {
     final ObjectMapper mapper = mapper();
     JsonRoot root = mapper.readValue("{\n"
             + "  version: '1.0',\n"
@@ -294,16 +261,6 @@ class ModelTest {
             + "           type: 'view',\n"
             + "           sql: [ 'values (1)', '(2)' ]\n"
             + "         }\n"
-            + "       ],\n"
-            + "       lattices: [\n"
-            + "         {\n"
-            + "           name: 'SalesStar',\n"
-            + "           sql: 'select * from sales_fact_1997'\n"
-            + "         },\n"
-            + "         {\n"
-            + "           name: 'SalesStar2',\n"
-            + "           sql: [ 'select *', 'from sales_fact_1997' ]\n"
-            + "         }\n"
             + "       ]\n"
             + "     }\n"
             + "   ]\n"
@@ -313,13 +270,6 @@ class ModelTest {
     assertThat(root.schemas, hasSize(1));
     final JsonMapSchema schema = (JsonMapSchema) root.schemas.get(0);
     assertThat(schema.name, is("FoodMart"));
-    assertThat(schema.lattices, hasSize(2));
-    final JsonLattice lattice0 = schema.lattices.get(0);
-    assertThat(lattice0.name, is("SalesStar"));
-    assertThat(lattice0.getSql(), is("select * from sales_fact_1997"));
-    final JsonLattice lattice1 = schema.lattices.get(1);
-    assertThat(lattice1.name, is("SalesStar2"));
-    assertThat(lattice1.getSql(), is("select *\nfrom sales_fact_1997\n"));
     assertThat(schema.tables, hasSize(4));
     final JsonTable table1 = schema.tables.get(1);
     assertTrue(!(table1 instanceof JsonView));

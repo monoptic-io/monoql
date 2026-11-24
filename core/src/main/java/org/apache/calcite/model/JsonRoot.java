@@ -44,11 +44,6 @@ import static java.util.Objects.requireNonNull;
  *       {@link JsonStream} (in field {@link JsonTable#stream stream})
  *     {@link JsonView}
  *     {@link JsonFunction} (in collection {@link JsonMapSchema#functions functions})
- *     {@link JsonLattice} (in collection {@link JsonSchema#lattices lattices})
- *       {@link JsonMeasure} (in collection {@link JsonLattice#defaultMeasures defaultMeasures})
- *       {@link JsonTile} (in collection {@link JsonLattice#tiles tiles})
- *         {@link JsonMeasure} (in collection {@link JsonTile#measures measures})
- *     {@link JsonMaterialization} (in collection {@link JsonSchema#materializations materializations})
  *   {@link JsonType} (in collection {@link JsonRoot#types types})
  * </pre>
  * <!-- CHECKSTYLE: ON -->
