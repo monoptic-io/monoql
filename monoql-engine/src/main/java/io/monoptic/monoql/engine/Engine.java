@@ -112,12 +112,23 @@ public final class Engine implements Lowering.Context {
     registry.mount(name, catalog, null);
   }
 
-  /** Sets the current catalog and schema; either may be null. */
+  /** Sets the current catalog and schema; either may be null. Both are
+   * set, or, if either does not exist, neither. */
   public void use(String catalog, String schema) {
-    settings.update(new Setting(Setting.CATALOG, null),
-        new Setting(Setting.CATALOG, catalog));
-    settings.update(new Setting(Setting.SCHEMA, null),
-        new Setting(Setting.SCHEMA, schema));
+    final String previousCatalog = settings.catalog();
+    final String previousSchema = settings.schema();
+    try {
+      set(Setting.CATALOG, catalog);
+      set(Setting.SCHEMA, schema);
+    } catch (RuntimeException e) {
+      set(Setting.CATALOG, previousCatalog);
+      set(Setting.SCHEMA, previousSchema);
+      throw e;
+    }
+  }
+
+  private void set(String name, String value) {
+    settings.update(new Setting(name, null), new Setting(name, value));
   }
 
   /** Who the session acts as; null if nobody. */

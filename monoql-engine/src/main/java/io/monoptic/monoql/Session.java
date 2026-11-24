@@ -121,6 +121,21 @@ public final class Session implements AutoCloseable {
     return engine.explain(sql);
   }
 
+  /** Sets the current catalog and schema, as {@code USE} does, but from
+   * names as they are stored: nothing is folded to upper case, and nothing
+   * needs quoting. Either may be null, for none; a schema needs a catalog.
+   *
+   * <p>With {@link #as}, {@link #currentCatalog} and
+   * {@link #currentSchema}, this is how a server keeps no sessions: it
+   * hands a client its catalog and schema, and makes a session of them
+   * again for each request.
+   *
+   * @throws io.monoptic.monoql.catalog.NotFoundException if the catalog is
+   *     not mounted, or has no such schema; the session is left as it was */
+  public void use(String catalog, String schema) {
+    engine.use(catalog, schema);
+  }
+
   /** Current catalog, or null. */
   public String currentCatalog() {
     return engine.currentCatalog();
