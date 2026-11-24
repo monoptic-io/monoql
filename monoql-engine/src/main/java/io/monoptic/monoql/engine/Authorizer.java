@@ -242,6 +242,15 @@ final class Authorizer {
    *     table has no such column */
   void checkWrite(String table, Op op, String catalog,
       UnaryOperator<String> row) {
+    if (table.equals("JOBS") && op != Op.DELETE
+        && !user.equals(row.apply("SUBMITTED_BY"))) {
+      // A job runs as whoever submitted it, so nobody submits one, or
+      // changes what one does, in another's name; whatever the catalog's
+      // grants, or lack of them.
+      throw new AccessDeniedException("User " + user + " may submit and"
+          + " change only jobs whose SUBMITTED_BY is " + user + "; this"
+          + " one's is " + row.apply("SUBMITTED_BY"));
+    }
     final List<Grant> grants = grants(catalog);
     if (grants == null) {
       return;

@@ -254,6 +254,13 @@ final class Relation<R extends MetaRow> {
           "Cannot move a row of " + name + " to another catalog");
     }
     checkObserved(before, after);
+    if (name.equals("JOBS")) {
+      final int by = codec.ordinal("SUBMITTED_BY");
+      if (!Objects.equals(before[by], after[by])) {
+        throw new CatalogException("SUBMITTED_BY of a job is who submitted"
+            + " it, and does not change");
+      }
+    }
     final R old = decode(before);
     final R updated = decode(after);
     authorize(authorizer, Authorizer.Op.UPDATE, before);

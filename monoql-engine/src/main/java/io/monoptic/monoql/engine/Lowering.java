@@ -492,6 +492,7 @@ final class Lowering {
                           "SCHEMA_NAME", SqlText.str(name.schema),
                           "JOB_NAME", SqlText.str(name.name),
                           "SUBMITTED_AT", "CURRENT_TIMESTAMP",
+                          "SUBMITTED_BY", "CURRENT_USER",
                           "STATEMENT", SqlText.str(fill.sql())))),
               false, null));
     } else {
@@ -839,6 +840,7 @@ final class Lowering {
                       "SCHEMA_NAME", SqlText.str(name.schema),
                       "JOB_NAME", SqlText.str(name.name),
                       "SUBMITTED_AT", "CURRENT_TIMESTAMP",
+                          "SUBMITTED_BY", "CURRENT_USER",
                       "STATEMENT", SqlText.str(action),
                       "OPTIONS", SqlText.map(n.options)))));
     case REFRESH:

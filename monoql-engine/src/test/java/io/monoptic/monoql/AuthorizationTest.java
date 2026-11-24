@@ -214,6 +214,40 @@ class AuthorizationTest {
     assertEquals(2, rows(ann, "select * from mine.m").size());
   }
 
+  /** A job runs as whoever submitted it, so nobody submits or changes one
+   * in another's name. */
+  @Test void jobs() {
+    run(root, "create schema mine", "grant all on schema mine to bob",
+        "create trigger mine.tr schedule '@daily' as 'go'");
+    run(bob, "fire trigger mine.tr");
+    assertEquals(List.of("[TR, BOB, go]"),
+        rows(root, "select job_name, submitted_by, statement"
+            + " from metadata.jobs"));
+    final String insert = "insert into metadata.jobs (schema_name, job_name,"
+        + " submitted_at, submitted_by, statement) values ('MINE', 'j',"
+        + " current_timestamp, ";
+    assertEquals("User BOB may submit and change only jobs whose"
+            + " SUBMITTED_BY is BOB; this one's is ANN",
+        denied(bob, insert + "'ANN', 'select 1')"));
+    denied(bob, "insert into metadata.jobs (schema_name, job_name,"
+        + " submitted_at, statement) values ('MINE', 'j', current_timestamp,"
+        + " 'select 1')");
+    run(bob, insert + "current_user, 'select 1')");
+    // Owning the schema is not enough to submit one,
+    denied(ann, insert + "current_user, 'select 1')");
+    // nor to change what someone else's does; though it is to cancel it.
+    run(root, "grant all on schema mine to ann");
+    denied(ann, "update metadata.jobs set statement = 'select 2'"
+        + " where job_name = 'j'");
+    assertThrows(CatalogException.class,
+        () -> bob.execute("update metadata.jobs set submitted_by = 'ANN'"
+            + " where job_name = 'j'"));
+    run(bob, "update metadata.jobs set statement = 'select 2'"
+        + " where job_name = 'j'");
+    run(ann, "delete from metadata.jobs where job_name = 'j'");
+    assertEquals(1, rows(root, "select * from metadata.jobs").size());
+  }
+
   /** Creating takes a privilege on the schema; everything after that
    * takes ownership, which creating confers. */
   @Test void creatingAndOwning() {
