@@ -51,6 +51,18 @@ class SessionTest {
     assertEquals(List.of("[2, x]"), rows(session, "select 1 + 1, 'x'"));
   }
 
+  @Test void bare() {
+    try (Session bare = Monoql.builder().bare().build()) {
+      assertNull(bare.currentCatalog());
+      assertEquals(List.of(), rows(bare, "show catalogs"));
+      run(bare, "create catalog c with (type = 'memory')", "use c",
+          "create schema s", "use s", "create table t (a int)");
+      assertEquals(List.of("[C, S, T]"),
+          rows(bare, "select catalog_name, schema_name, table_name"
+              + " from metadata.tables"));
+    }
+  }
+
   @Test void tableLifecycle() {
     run(session,
         "create table t (id int not null primary key, name varchar(20) "

@@ -91,7 +91,8 @@ Queries and `INSERT`, `UPDATE` and `DELETE` take parameters, including on
 the `METADATA` schema; DDL does not. A prepared statement is validated and
 planned again each time it runs: it is not a cached plan.
 
-`Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
+`Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`; or
+none at all, with `.bare()`, in place of the in-memory default), extra
 catalog types (`.provider(...)`), who to act as (`.identity(...)`: a user and
 the user's groups), and a hook to customize the Calcite `FrameworkConfig` the
 session plans with (`.configure(...)`). With an identity, statements are held

@@ -10,11 +10,17 @@ import io.monoptic.monoql.catalog.CatalogProvider;
 
 import org.apache.commons.dbcp2.BasicDataSource;
 
+import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.TreeSet;
+
+import javax.sql.DataSource;
 
 /** Provides {@code type = 'metastore'} catalogs.
  *
@@ -67,27 +73,63 @@ public class MetastoreCatalogProvider implements CatalogProvider {
           + create);
     }
     final Catalog data = data(name, dataOptions);
-    final BasicDataSource dataSource = new BasicDataSource();
-    dataSource.setUrl(url);
-    if (options.get("driver") != null) {
-      dataSource.setDriverClassName(options.get("driver"));
-    }
-    dataSource.setUsername(options.get("user"));
-    dataSource.setPassword(options.get("password"));
+    final List<String> where =
+        Arrays.asList(url, options.get("driver"), options.get("user"),
+            options.get("password"));
+    final Runnable release = () -> release(where);
     try {
-      return new MetastoreCatalog(dataSource,
+      return new MetastoreCatalog(acquire(where), release,
           options.getOrDefault("tenant", "default"), name,
           create.equals("true"), data);
     } catch (RuntimeException e) {
-      try {
-        dataSource.close();
-      } catch (java.sql.SQLException e2) {
-        e.addSuppressed(e2);
-      }
+      release.run();
       if (data != null) {
         data.close();
       }
       throw e;
+    }
+  }
+
+  /** Connections to a metastore, and how many catalogs are using them. */
+  private static final class Pool {
+    final BasicDataSource dataSource = new BasicDataSource();
+    int users;
+  }
+
+  /** One pool of connections for each metastore, whatever the number of
+   * catalogs in it: a server with a thousand tenants has a thousand
+   * catalogs, and must not have a thousand pools. Keyed by URL, driver,
+   * user and password. */
+  private static final Map<List<String>, Pool> POOLS = new HashMap<>();
+
+  private static DataSource acquire(List<String> where) {
+    synchronized (POOLS) {
+      final Pool pool = POOLS.computeIfAbsent(where, w -> {
+        final Pool p = new Pool();
+        p.dataSource.setUrl(w.get(0));
+        if (w.get(1) != null) {
+          p.dataSource.setDriverClassName(w.get(1));
+        }
+        p.dataSource.setUsername(w.get(2));
+        p.dataSource.setPassword(w.get(3));
+        return p;
+      });
+      pool.users++;
+      return pool.dataSource;
+    }
+  }
+
+  private static void release(List<String> where) {
+    synchronized (POOLS) {
+      final Pool pool = POOLS.get(where);
+      if (pool != null && --pool.users == 0) {
+        POOLS.remove(where);
+        try {
+          pool.dataSource.close();
+        } catch (SQLException e) {
+          // Its connections are closed as far as they can be.
+        }
+      }
     }
   }
 
