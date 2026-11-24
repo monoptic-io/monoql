@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 /** Entry point: builds {@link Session}s.
@@ -80,6 +82,7 @@ public final class Monoql {
     String defaultSchema;
     Identity identity;
     boolean bare;
+    Predicate<String> functionClasses = name -> true;
 
     private Builder() {
     }
@@ -98,6 +101,22 @@ public final class Monoql {
      * current catalog until it is given one. */
     public Builder bare() {
       this.bare = true;
+      return this;
+    }
+
+    /** Says which classes a function may be made of: the classes that
+     * {@code CREATE FUNCTION ... AS 'com.example.MyClass'} may name and
+     * the engine will then call. By default, any class on the class path,
+     * which suits an application that writes its own SQL.
+     *
+     * <p>To name a class is to run its code, with whatever the process
+     * can do: {@code 'java.lang.System#exit'} is a function. A session
+     * that runs statements written by people who should not have that
+     * power must say which classes are safe, or that none is
+     * ({@code name -> false}). A function of a class that is not allowed
+     * can still be created, and described; calling it fails. */
+    public Builder functionClasses(Predicate<String> allowed) {
+      this.functionClasses = Objects.requireNonNull(allowed);
       return this;
     }
 

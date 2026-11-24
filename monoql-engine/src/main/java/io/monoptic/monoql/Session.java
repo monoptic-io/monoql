@@ -27,7 +27,7 @@ public final class Session implements AutoCloseable {
   Session(Monoql.Builder builder) {
     this.engine =
         new Engine(builder.frameworkConfig(), builder.providers,
-            builder.identity);
+            builder.identity, builder.functionClasses);
     String catalog = builder.defaultCatalog;
     String schema = builder.defaultSchema;
     if (builder.catalogs.isEmpty() && !builder.bare) {

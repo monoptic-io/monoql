@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /** The engine behind a {@link io.monoptic.monoql.Session}.
  *
@@ -75,10 +76,13 @@ public final class Engine implements Lowering.Context {
    *
    * @param identity Who the session acts as, or null. With an identity,
    *     statements are checked against the grants of each catalog; see
-   *     {@link Authorizer} */
+   *     {@link Authorizer}
+   * @param functionClasses Which classes a {@code JAVA} function may
+   *     name */
   public Engine(FrameworkConfig config, List<CatalogProvider> providers,
-      Identity identity) {
-    this(config, new CatalogRegistry(providers), true, identity);
+      Identity identity, Predicate<String> functionClasses) {
+    this(config, new CatalogRegistry(providers, functionClasses), true,
+        identity);
   }
 
   private Engine(FrameworkConfig config, CatalogRegistry registry,

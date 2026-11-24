@@ -165,6 +165,12 @@ The language defaults to `JAVA`, for which the definition is a class name
 or `Class#method`. The engine can call `JAVA` functions. Functions in other
 languages are recorded for the backend to run; the engine does not call them.
 
+To name a class is to run its code, as the process: `'java.lang.System#exit'`
+is a function. An application that runs SQL written by others says which
+classes may be named, or that none may, with
+`Monoql.builder().functionClasses(...)`; by default, any may. A function of a
+class that is not allowed can be created and described, but not called.
+
 ## Triggers
 
 ```

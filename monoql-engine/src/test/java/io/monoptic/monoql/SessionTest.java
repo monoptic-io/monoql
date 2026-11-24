@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql;
 
+import io.monoptic.monoql.catalog.AccessDeniedException;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.NotFoundException;
@@ -49,6 +50,32 @@ class SessionTest {
             "[user, null]"),
         rows(session, "show settings"));
     assertEquals(List.of("[2, x]"), rows(session, "select 1 + 1, 'x'"));
+  }
+
+  /** A function is somebody's code, and not everybody's is welcome. */
+  @Test void functionClasses() {
+    try (Session open = Monoql.builder().build();
+        Session shut =
+            Monoql.builder()
+                .functionClasses(name -> name.startsWith("java.lang.Math"))
+                .build()) {
+      for (Session s : List.of(open, shut)) {
+        run(s, "create function prop as 'java.lang.System#getProperty'",
+            "create function root as 'java.lang.Math#sqrt'");
+        assertEquals(List.of("[3.0]"), rows(s, "select root(cast(9 as double))"));
+      }
+      assertEquals(List.of("[" + System.getProperty("user.dir") + "]"),
+          rows(open, "select prop('user.dir')"));
+      final AccessDeniedException e =
+          assertThrows(AccessDeniedException.class,
+              () -> rows(shut, "select prop('user.dir')"));
+      assertTrue(e.getMessage().contains("java.lang.System"), e.getMessage());
+      // And the same for whoever the session is passed on to.
+      try (Session ann = shut.as(Identity.of("ANN"))) {
+        assertThrows(RuntimeException.class,
+            () -> rows(ann, "select prop('user.dir')"));
+      }
+    }
   }
 
   @Test void bare() {

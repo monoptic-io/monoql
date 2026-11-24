@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.catalog.AccessDeniedException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.FunctionInfo;
@@ -35,6 +36,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiFunction;
+import java.util.function.Predicate;
 
 /** The Calcite schema tree, backed directly by catalogs: the root holds
  * {@code METADATA} and one schema per mounted catalog; a catalog holds its
@@ -89,7 +91,8 @@ final class CatalogSchemas {
       }
       final Catalog catalog = registry.catalog(name);
       return catalog == null ? null
-          : new CatalogSchema(name, catalog, typeDeriver);
+          : new CatalogSchema(name, catalog, typeDeriver,
+              registry.functionClasses());
     }
 
     @Override protected Set<String> subSchemaNames() {
@@ -111,18 +114,22 @@ final class CatalogSchemas {
     private final String catalogName;
     private final Catalog catalog;
     private final BiFunction<String, List<String>, RelDataType> typeDeriver;
+    private final Predicate<String> functionClasses;
 
     CatalogSchema(String catalogName, Catalog catalog,
-        BiFunction<String, List<String>, RelDataType> typeDeriver) {
+        BiFunction<String, List<String>, RelDataType> typeDeriver,
+        Predicate<String> functionClasses) {
       this.catalogName = catalogName;
       this.catalog = catalog;
       this.typeDeriver = typeDeriver;
+      this.functionClasses = functionClasses;
     }
 
     @Override protected Schema subSchema(String name) {
       final Optional<SchemaInfo> info = get(catalog.schemas(), Key.of(name));
       return info.isEmpty() ? null
-          : new Namespace(catalogName, catalog, name, typeDeriver);
+          : new Namespace(catalogName, catalog, name, typeDeriver,
+              functionClasses);
     }
 
     @Override protected Set<String> subSchemaNames() {
@@ -138,13 +145,16 @@ final class CatalogSchemas {
     private final Catalog catalog;
     private final String schemaName;
     private final BiFunction<String, List<String>, RelDataType> typeDeriver;
+    private final Predicate<String> functionClasses;
 
     Namespace(String catalogName, Catalog catalog, String schemaName,
-        BiFunction<String, List<String>, RelDataType> typeDeriver) {
+        BiFunction<String, List<String>, RelDataType> typeDeriver,
+        Predicate<String> functionClasses) {
       this.catalogName = catalogName;
       this.catalog = catalog;
       this.schemaName = schemaName;
       this.typeDeriver = typeDeriver;
+      this.functionClasses = functionClasses;
     }
 
     @Override protected Table table(String name) {
@@ -189,7 +199,7 @@ final class CatalogSchemas {
         // cannot call them.
         return List.of();
       }
-      return List.of(javaFunction(info.get()));
+      return List.of(javaFunction(info.get(), functionClasses));
     }
 
     @Override public Set<String> getFunctionNames() {
@@ -201,12 +211,19 @@ final class CatalogSchemas {
 
   /** Loads a Java function: {@code com.example.MyClass} (a scalar function
    * with an {@code eval} method, a table function, or an aggregate), or
-   * {@code com.example.MyClass#method}. */
-  static Function javaFunction(FunctionInfo info) {
+   * {@code com.example.MyClass#method}.
+   *
+   * @param allowed Which classes may be loaded: to name a class is to run
+   *     its code, as the process, whoever wrote the statement */
+  static Function javaFunction(FunctionInfo info, Predicate<String> allowed) {
     final String definition = info.definition();
     final int hash = definition.indexOf('#');
     final String className =
         hash < 0 ? definition : definition.substring(0, hash);
+    if (!allowed.test(className)) {
+      throw new AccessDeniedException("Function " + info.key() + ": class "
+          + className + " may not be called from SQL here");
+    }
     final Class<?> clazz;
     try {
       clazz = Class.forName(className, true,

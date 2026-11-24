@@ -20,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.TreeSet;
@@ -42,13 +43,23 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
   /** Told when a catalog is mounted, replaced or dropped. */
   private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
-  CatalogRegistry(List<CatalogProvider> extraProviders) {
+  private final Predicate<String> functionClasses;
+
+  CatalogRegistry(List<CatalogProvider> extraProviders,
+      Predicate<String> functionClasses) {
+    this.functionClasses = functionClasses;
     for (CatalogProvider p : ServiceLoader.load(CatalogProvider.class)) {
       providers.put(p.type().toLowerCase(Locale.ROOT), p);
     }
     for (CatalogProvider p : extraProviders) {
       providers.put(p.type().toLowerCase(Locale.ROOT), p);
     }
+  }
+
+  /** Which classes a {@code JAVA} function may name; the same for every
+   * session over these catalogs. */
+  Predicate<String> functionClasses() {
+    return functionClasses;
   }
 
   void addListener(Runnable listener) {
