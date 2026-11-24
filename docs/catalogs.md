@@ -206,13 +206,12 @@ default Optional<Table> bind(MaterializedViewInfo view, List<Column> columns)
 what holds the view's rows, making it if it is not there and reshaping it if
 the columns have changed.
 
-- Return a `WritableTable` and the engine keeps it filled: when the view is
-  created, and whenever a row is inserted into `REFRESHES`, it runs the
-  definition and calls `replace(rows)`, which must swap the rows in one
-  change. Nothing else writes to it; the engine rejects DML on a
-  materialized view.
-- Return some other table, and reads come from it, but filling it is the
-  catalog's business: a `REFRESH` is a row in `REFRESHES` for it to act on.
+- Return a table that can be written, in either of the ways a table from
+  `bind(TableInfo)` can, and the engine fills it with ordinary DML: an
+  `INSERT` of the definition when the view is created, and a `DELETE` and
+  that `INSERT` at each `REFRESH`. Those are steps of one statement, so they
+  run inside `atomically` (below); whether a reader can see the view empty
+  in between is up to that.
 - Return empty (the default) and the view reads as its definition.
 
 Dropping the view should drop its rows: `StandardCatalog` calls
@@ -237,7 +236,7 @@ returns. The default does neither, and says so by being the default.
 | Catalog | |
 |---|---|
 | `metastore` | A database transaction. Writers to one tenant take turns, from each one's first change to its end, so that what a rule checked (the schema exists; the schema is empty) is still true when the change is made. Readers do not wait, and see what is committed. |
-| `memory` | Writers take turns, but nothing is undone. |
+| `memory` | For the rows of tables and materialized views: nobody else sees what a statement writes until it ends, and nothing is written if it fails. For metadata: writers take turns, but nothing is undone. |
 | `jdbc` | Each change is its own statement in the database. |
 
 Things to know:

@@ -14,7 +14,12 @@ import java.util.Map;
  * <p>Running the steps by hand has the same effect as running the statement.
  * What a statement adds is strictness about existence: {@code DROP TABLE t}
  * fails if there is no {@code t}, where the bare {@code DELETE} would quietly
- * delete nothing. */
+ * delete nothing. And a statement is one unit: where a catalog makes
+ * statements atomic, its steps happen together or not at all, which steps
+ * run one by one do not.
+ *
+ * <p>If a step that skips rows that already exist ({@code IF NOT EXISTS})
+ * skips its row, the steps after it are not run. */
 public record Lowered(List<Step> steps) {
   public Lowered {
     steps = List.copyOf(steps);
@@ -32,11 +37,20 @@ public record Lowered(List<Step> steps) {
    * @param doomed If not null, the step is a {@code DELETE}, and these are
    *     the rows it names, each a map from column to value. A catalog that
    *     can remove rows but cannot list them (one that can revoke a grant,
-   *     say, but not enumerate grants) is asked to delete exactly these */
+   *     say, but not enumerate grants) is asked to delete exactly these
+   * @param fill Whether the step writes the rows of a materialized view.
+   *     It is skipped if the view's catalog does not keep its rows, since
+   *     the view then reads as its definition and has none to write */
   public record Step(String sql, boolean ignoreConflict, String notFound,
-      String catalog, String table, List<Map<String, Object>> doomed) {
+      String catalog, String table, List<Map<String, Object>> doomed,
+      boolean fill) {
     Step(String sql, boolean ignoreConflict, String notFound) {
-      this(sql, ignoreConflict, notFound, null, null, null);
+      this(sql, ignoreConflict, notFound, null, null, null, false);
+    }
+
+    /** A step that writes the rows of a materialized view. */
+    static Step fill(String sql) {
+      return new Step(sql, false, null, null, null, null, true);
     }
   }
 
