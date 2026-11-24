@@ -37,16 +37,14 @@ public final class MetaTables {
   public static final Def<MaterializedViewInfo> MATERIALIZED_VIEWS =
       new Def<>("MATERIALIZED_VIEWS", MaterializedViewInfo.class,
           Catalog::materializedViews);
-  public static final Def<Refresh> REFRESHES =
-      new Def<>("REFRESHES", Refresh.class, Catalog::refreshes);
   public static final Def<PartitionInfo> PARTITIONS =
       new Def<>("PARTITIONS", PartitionInfo.class, Catalog::partitions);
   public static final Def<FunctionInfo> FUNCTIONS =
       new Def<>("FUNCTIONS", FunctionInfo.class, Catalog::functions);
   public static final Def<TriggerInfo> TRIGGERS =
       new Def<>("TRIGGERS", TriggerInfo.class, Catalog::triggers);
-  public static final Def<Firing> FIRINGS =
-      new Def<>("FIRINGS", Firing.class, Catalog::firings);
+  public static final Def<Job> JOBS =
+      new Def<>("JOBS", Job.class, Catalog::jobs);
   public static final Def<RoleInfo> ROLES =
       new Def<>("ROLES", RoleInfo.class, Catalog::roles);
   public static final Def<UserInfo> USERS =
@@ -58,7 +56,6 @@ public final class MetaTables {
 
   /** Every per-catalog metadata table. */
   public static final List<Def<?>> ALL =
-      List.of(SCHEMAS, TABLES, VIEWS, MATERIALIZED_VIEWS, REFRESHES,
-          PARTITIONS, FUNCTIONS, TRIGGERS, FIRINGS, ROLES, USERS, GRANTS,
-          ROLE_GRANTS);
+      List.of(SCHEMAS, TABLES, VIEWS, MATERIALIZED_VIEWS, PARTITIONS,
+          FUNCTIONS, TRIGGERS, JOBS, ROLES, USERS, GRANTS, ROLE_GRANTS);
 }

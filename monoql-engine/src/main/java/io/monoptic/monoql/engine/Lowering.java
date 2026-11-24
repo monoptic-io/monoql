@@ -11,7 +11,11 @@ import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.catalog.Grant;
 import io.monoptic.monoql.catalog.Key;
 import io.monoptic.monoql.catalog.MaterializedViewInfo;
+import io.monoptic.monoql.catalog.MetaRow;
+import io.monoptic.monoql.catalog.MetaTable;
+import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.TableInfo;
+import io.monoptic.monoql.catalog.TriggerInfo;
 import io.monoptic.monoql.catalog.UnsupportedException;
 import io.monoptic.monoql.engine.Lowered.Step;
 import io.monoptic.monoql.sql.ObjectKind;
@@ -48,6 +52,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.function.Function;
 
 /** Rewrites DDL, DCL and control statements as DML and queries against the
  * {@code METADATA} schema.
@@ -717,50 +722,40 @@ final class Lowering {
               where(n.kind, name)),
           notFound(n.kind, name));
     case FIRE:
+      // A job, for whatever runs the catalog's jobs: the trigger's action,
+      // under the trigger's name.
+      final String action =
+          find(name, Catalog::triggers).map(TriggerInfo::action)
+              .orElseThrow(() ->
+                  new NotFoundException(notFound(n.kind, name)));
       return Lowered.of(
-          insert(false, "FIRINGS",
+          insert(false, "JOBS",
               List.of(
                   row(CATALOG_NAME, SqlText.str(name.catalog),
                       "SCHEMA_NAME", SqlText.str(name.schema),
-                      "TRIGGER_NAME", SqlText.str(name.name),
-                      "FIRED_AT", "CURRENT_TIMESTAMP",
+                      "JOB_NAME", SqlText.str(name.name),
+                      "SUBMITTED_AT", "CURRENT_TIMESTAMP",
+                      "STATEMENT", SqlText.str(action),
                       "OPTIONS", SqlText.map(n.options)))));
     case REFRESH:
-      // Out with the old rows and in with the new, and a note that it was
-      // asked for. If there is no such view, the note is what fails.
-      final List<Step> steps = new ArrayList<>();
-      definition(name).ifPresent(query -> {
-        steps.add(empty(name));
-        steps.add(fill(name, query));
-      });
-      steps.add(
-          new Step(
-              insert(false, "REFRESHES",
-                  List.of(
-                      row(CATALOG_NAME, SqlText.str(name.catalog),
-                          "SCHEMA_NAME", SqlText.str(name.schema),
-                          "VIEW_NAME", SqlText.str(name.name),
-                          "REQUESTED_AT", "CURRENT_TIMESTAMP"))),
-              false, null));
-      return new Lowered(steps);
+      // Out with the old rows and in with the new.
+      final String query =
+          find(name, Catalog::materializedViews)
+              .map(MaterializedViewInfo::definition)
+              .orElseThrow(() ->
+                  new NotFoundException(notFound(n.kind, name)));
+      return new Lowered(List.of(empty(name), fill(name, query)));
     default:
       throw new AssertionError(n.verb);
     }
   }
 
-  /** The query of a materialized view, if there is such a view. */
-  private Optional<String> definition(Name name) {
+  /** Finds the row of an object, if there is one. */
+  private <R extends MetaRow> Optional<R> find(Name name,
+      Function<Catalog, MetaTable<R>> table) {
     final Catalog catalog = context.catalog(name.catalog);
-    if (catalog == null) {
-      return Optional.empty();
-    }
-    try {
-      return catalog.materializedViews()
-          .get(Key.of(name.schema, name.name))
-          .map(MaterializedViewInfo::definition);
-    } catch (UnsupportedException e) {
-      return Optional.empty();
-    }
+    return catalog == null ? Optional.empty()
+        : table.apply(catalog).get(Key.of(name.schema, name.name));
   }
 
   // -- ALTER TABLE ----------------------------------------------------------

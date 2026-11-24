@@ -18,6 +18,7 @@ import org.apache.calcite.rel.type.RelDataTypeFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -203,7 +204,27 @@ final class Relation<R extends MetaRow> {
     }
   }
 
+  /** Columns that say what happened, which whatever acts on the rows
+   * writes, straight to the catalog; a statement may not. */
+  private static final Map<String, List<String>> OBSERVED =
+      Map.of("JOBS", List.of("STATE", "STARTED_AT", "FINISHED_AT", "ERROR"));
+
+  /** Checks that a statement leaves such columns alone.
+   *
+   * @param before The row as it was; null if it is new */
+  private void checkObserved(Object[] before, Object[] after) {
+    for (String column : OBSERVED.getOrDefault(name, List.of())) {
+      final int i = codec.ordinal(column);
+      if (!Objects.equals(before == null ? null : before[i], after[i])) {
+        throw new CatalogException(column + " of " + name + " says what"
+            + " happened, and is written by whatever runs them, not by a"
+            + " statement");
+      }
+    }
+  }
+
   void insert(Authorizer authorizer, Object[] row) {
+    checkObserved(null, row);
     authorize(authorizer, Authorizer.Op.INSERT, row);
     target(row).insert(decode(row));
     written(authorizer, null, row);
@@ -211,6 +232,7 @@ final class Relation<R extends MetaRow> {
 
   /** Inserts a row, or replaces the row with the same key. */
   void upsert(Authorizer authorizer, Object[] row) {
+    checkObserved(null, row);
     final MetaTable<R> table = target(row);
     final R after = decode(row);
     final Optional<R> before = table.get(after.key());
@@ -231,6 +253,7 @@ final class Relation<R extends MetaRow> {
       throw new CatalogException(
           "Cannot move a row of " + name + " to another catalog");
     }
+    checkObserved(before, after);
     final R old = decode(before);
     final R updated = decode(after);
     authorize(authorizer, Authorizer.Op.UPDATE, before);

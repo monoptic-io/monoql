@@ -146,6 +146,8 @@ than silent no-ops:
   Elsewhere it reads as its definition.
   Nothing runs a `SCHEDULE`, and no query is rewritten to use a
   materialized view it does not name.
+- A job (`METADATA.JOBS`; `FIRE TRIGGER` submits one) is a statement for
+  something else to run. Nothing in this repository runs them.
 - Grants are enforced only for a session that acts as someone, and only in
   catalogs that have a `GRANTS` table. Anyone can read metadata. There is
   no authentication, and nothing is enforced against the embedding

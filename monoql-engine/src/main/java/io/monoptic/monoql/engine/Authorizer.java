@@ -46,7 +46,7 @@ import java.util.function.UnaryOperator;
  *     {@code CREATE SCHEMA} is held on the catalog. The user who creates
  *     an object is granted {@code OWNERSHIP} of it.
  * <li>Changing or dropping an object, or anything that belongs to it (a
- *     column, a partition, a firing, a refresh), takes ownership.
+ *     column, a partition), takes ownership.
  * <li>Granting or revoking a privilege on an object takes ownership of it,
  *     or that privilege with the grant option.
  * <li>Roles, users and role membership take ownership of the catalog.
@@ -84,9 +84,7 @@ final class Authorizer {
           "TRIGGERS", new Kind("TRIGGER", "TRIGGER_NAME", false),
           "SCHEMAS", new Kind(SCHEMA, null, false),
           "COLUMNS", new Kind("TABLE", "TABLE_NAME", true),
-          "PARTITIONS", new Kind("TABLE", "TABLE_NAME", true),
-          "FIRINGS", new Kind("TRIGGER", "TRIGGER_NAME", true),
-          "REFRESHES", new Kind("MATERIALIZED VIEW", "VIEW_NAME", true));
+          "PARTITIONS", new Kind("TABLE", "TABLE_NAME", true));
 
   /** What is being done to a metadata row. */
   enum Op { INSERT, UPDATE, DELETE }

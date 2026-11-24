@@ -141,7 +141,7 @@ REFRESH MATERIALIZED VIEW name
 | `CREATE MATERIALIZED VIEW` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO` the view, of its query |
 | `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS` |
 | `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED` |
-| `REFRESH` | `DELETE FROM` the view, `INSERT INTO` it, of its query, then `INSERT INTO METADATA.REFRESHES` |
+| `REFRESH` | `DELETE FROM` the view, then `INSERT INTO` it, of its query |
 
 The query is validated when the view is created, and stored with every name
 fully qualified, so a view means the same thing whatever the current schema
@@ -174,8 +174,8 @@ REFRESH MATERIALIZED VIEW totals;          -- runs the query again
 - `SCHEDULE` and `PAUSE` are recorded for whatever runs schedules. monoql
   does not: it is a library, and has no process to run them in.
 - In a catalog that does not keep the rows, a materialized view reads as its
-  query, like a view. The steps that write its rows are skipped, and
-  `REFRESH` only records the request.
+  query, like a view. The step that fills it when it is created is
+  skipped, and `REFRESH` is an error: there is nothing to refresh.
 - A query is never rewritten to read a materialized view it does not name.
 
 ## Functions
@@ -217,13 +217,39 @@ FIRE TRIGGER name [WITH (...)]
 | `CREATE TRIGGER` | `INSERT INTO METADATA.TRIGGERS` |
 | `DROP TRIGGER` | `DELETE FROM METADATA.TRIGGERS` |
 | `PAUSE`, `RESUME` | `UPDATE METADATA.TRIGGERS SET PAUSED` |
-| `FIRE` | `INSERT INTO METADATA.FIRINGS` |
+| `FIRE` | `INSERT INTO METADATA.JOBS`, of the trigger's action |
 
 A trigger is deliberately general. With a timing and events it is a classic
 table trigger; with only a schedule it is a scheduled task; with only a table
 it is a change hook. The action is a string, which means whatever the catalog
 takes it to mean; or a SQL statement, which is checked by the parser and
-stored as text. The options of `FIRE` are the parameters of that firing.
+stored as text.
+
+### Jobs
+
+A job is a statement for something else to run: another engine, a worker,
+whatever stands behind the catalog. There is no syntax for one. It is a row
+of `METADATA.JOBS`:
+
+```sql
+INSERT INTO metadata.jobs (schema_name, job_name, submitted_at, statement)
+VALUES ('S', 'nightly', CURRENT_TIMESTAMP, 'REFRESH MATERIALIZED VIEW s.totals');
+SELECT job_name, state, finished_at, error FROM metadata.jobs;
+DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
+```
+
+- Inserting the row submits the job, and deleting it cancels it. Several
+  jobs may have the same name; when they were submitted tells them apart.
+- `FIRE TRIGGER` submits the trigger's action as a job of the trigger's
+  name, with the options of `FIRE` as the job's.
+- A trigger's action can itself be an `INSERT INTO metadata.jobs`, which
+  makes the trigger a schedule and a job to submit on it.
+- `STATE`, `STARTED_AT`, `FINISHED_AT` and `ERROR` say what happened. They
+  are written by whatever runs the job, and a statement that sets them is
+  rejected.
+- monoql runs no jobs: it is a library, and has no process to run them in.
+  In the in-memory catalog a job is a row that nothing acts on.
+- In a catalog with grants, writing `JOBS` takes ownership of the schema.
 
 ## Roles, users and privileges
 
@@ -286,7 +312,8 @@ the catalogs. The identity is shown by `SHOW SETTINGS` (`user`, `groups`) and
 | `INSERT`, `UPDATE`, `DELETE` rows of a table | that privilege on it |
 | Create a table, view, materialized view, function or trigger | `CREATE TABLE`, `CREATE VIEW`, `CREATE MATERIALIZED VIEW`, `CREATE FUNCTION` or `CREATE TRIGGER` on the schema |
 | Create a schema | `CREATE SCHEMA` on the catalog |
-| Alter, comment on, pause, resume, fire, refresh, replace or drop something | `OWNERSHIP` of it |
+| Alter, comment on, pause, resume, replace or drop something | `OWNERSHIP` of it |
+| Fire a trigger, or submit or cancel a job any other way | `OWNERSHIP` of the schema |
 | Write the rows of a materialized view, which refreshing does | `OWNERSHIP` of it, and `SELECT` on what the rows are read from |
 | `GRANT` or `REVOKE` a privilege on something | `OWNERSHIP` of it; or that privilege on it `WITH GRANT OPTION` |
 | Anything about roles and users | `OWNERSHIP` of the catalog |

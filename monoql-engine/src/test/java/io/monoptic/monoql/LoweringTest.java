@@ -65,11 +65,14 @@ class LoweringTest {
             + "WHERE \"CATALOG_NAME\" = 'MEMORY' AND \"SCHEMA_NAME\" = 'S' "
             + "AND \"TRIGGER_NAME\" = 'TR'",
         lower("pause trigger tr"));
-    assertEquals("INSERT INTO \"METADATA\".\"FIRINGS\" (\"CATALOG_NAME\", "
-            + "\"SCHEMA_NAME\", \"TRIGGER_NAME\", \"FIRED_AT\", "
-            + "\"OPTIONS\")\n"
+    // Firing a trigger hands its action to whatever runs jobs.
+    session.execute("create trigger tr schedule '@daily' as"
+        + " refresh materialized view mv");
+    assertEquals("INSERT INTO \"METADATA\".\"JOBS\" (\"CATALOG_NAME\", "
+            + "\"SCHEMA_NAME\", \"JOB_NAME\", \"SUBMITTED_AT\", "
+            + "\"STATEMENT\", \"OPTIONS\")\n"
             + "VALUES ('MEMORY', 'S', 'TR', CURRENT_TIMESTAMP, "
-            + "MAP['why', 'test'])",
+            + "'REFRESH MATERIALIZED VIEW \"MV\"', MAP['why', 'test'])",
         lower("fire trigger tr with (why = 'test')"));
   }
 
