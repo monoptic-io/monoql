@@ -22,5 +22,6 @@ include(
     "monoql-catalog",
     "monoql-engine",
     "monoql-jdbc",
+    "monoql-metastore",
     "monoql-repl"
 )

@@ -193,6 +193,41 @@ default Optional<org.apache.calcite.schema.Table> bind(TableInfo table)
   the right answer for registries, and for planning pipelines that run
   elsewhere.
 
+## Atomic statements
+
+A statement is often several changes: `DROP TABLE` removes a row of `TABLES`
+and the grants on it; `CREATE TABLE ... AS` adds a table and then its rows;
+an `INSERT` into a metadata table may add many rows. A catalog can make
+them one:
+
+```java
+default <T> T atomically(Supplier<T> work) { return work.get(); }
+```
+
+The engine runs every statement that is not a query inside `atomically`,
+for each catalog of the session. A catalog that can, undoes what the work
+did to it if the work throws, and shows nobody the changes until it
+returns. The default does neither, and says so by being the default.
+
+| Catalog | |
+|---|---|
+| `metastore` | A database transaction. Writers to one tenant take turns, from each one's first change to its end, so that what a rule checked (the schema exists; the schema is empty) is still true when the change is made. Readers do not wait, and see what is committed. |
+| `memory` | Writers take turns, but nothing is undone. |
+| `jdbc` | Each change is its own statement in the database. |
+
+Things to know:
+
+- **It is per catalog.** A statement that changes two catalogs is two
+  units, and one can fail after the other has finished. In particular, a
+  `metastore` catalog's data catalog is not part of its transaction. Its
+  changes are made last, so a failure there undoes the metadata; but a
+  table created there stays created if the metadata then cannot be
+  committed.
+- **A change is to a row as it was read.** An `UPDATE` or `DELETE` of a
+  metadata row that someone else has changed since the statement read it
+  fails, rather than overwrite what they did.
+- **It is per statement.** There are no transactions that span statements.
+
 ## Providers
 
 `CREATE CATALOG c WITH (type = 'x', ...)` needs something that makes
@@ -219,6 +254,61 @@ do, including the integrity rules a good backend enforces: objects live in
 schemas that exist, tables and views share a namespace, a schema that has
 objects cannot be dropped, partitions match their table's partition keys.
 `MemoryMetaTable` is reusable on its own, to back one table of a catalog.
+
+Those rules are not the memory catalog's own. They are `StandardCatalog`
+(in `io.monoptic.monoql.catalog.standard`), which keeps its rows in a
+`Storage`: a map from key to row for each metadata table, and a way to make
+several changes as one. The memory catalog is the standard catalog over the
+heap; the next one is the standard catalog over a database. A third is a
+`Storage` away.
+
+**`metastore`** (`MetastoreCatalog`, in `monoql-metastore`) supports every
+table too, and keeps its metadata in a SQL database, so that it outlives
+the process and is shared by every process that mounts it.
+
+```sql
+CREATE CATALOG lake WITH (type = 'metastore',
+  url = 'jdbc:postgresql://db/metastore', user = 'monoql', password = '...',
+  tenant = 'acme',
+  'data.type' = 'jdbc', 'data.url' = 'jdbc:postgresql://db/acme');
+```
+
+- **One database, many tenants.** A catalog sees the metadata of its
+  `tenant` (by default, `default`) and its own name, and nothing else: two
+  tenants can each have a catalog `LAKE` with a table `S.ORDERS`, and
+  neither can tell. The tenant is fixed when the catalog is made; no
+  statement can name another.
+- **The rows of tables are in a data catalog**, of any type, given by
+  `data.type` and that type's options with `data.` in front. Creating,
+  altering and dropping a table (or a schema) does the same there, and
+  queries read from it. The data catalog is told a table's shape: columns,
+  keys. Comments and options stay in the metastore, as do views, grants and
+  everything else, so a data catalog needs only `SCHEMAS`, `TABLES` and
+  `bind`. Without a data catalog, tables are metadata only.
+- **Statements are atomic** in the metastore: see below.
+- Other options: `driver`; and `create = false`, if the metastore's tables
+  are made by someone else.
+
+The metastore is two tables, which the catalog creates if it may:
+
+```sql
+CREATE TABLE monoql_tenants (
+  tenant_id VARCHAR(255) NOT NULL PRIMARY KEY,
+  version BIGINT NOT NULL);
+CREATE TABLE monoql_metadata (
+  tenant_id VARCHAR(255) NOT NULL REFERENCES monoql_tenants ON DELETE CASCADE,
+  catalog_name VARCHAR(255) NOT NULL,
+  table_name VARCHAR(64) NOT NULL,     -- SCHEMAS, TABLES, GRANTS, ...
+  row_key VARCHAR(2000) NOT NULL,      -- the row's key, as a JSON array
+  row_data TEXT NOT NULL,              -- the row, as JSON
+  PRIMARY KEY (tenant_id, catalog_name, table_name, row_key));
+```
+
+A tenant's row appears when a catalog is first made for it; deleting the row
+deletes the tenant's metadata, and a server still using it finds that out at
+its next change. `version` counts the tenant's changes. It is developed
+against PostgreSQL, and wants a database in which a writer waits for a row
+that another has changed.
 
 **`jdbc`** (`JdbcCatalog`, in `monoql-jdbc`) fronts any JDBC database, and is
 an example of honest partial support:

@@ -7,6 +7,7 @@ package io.monoptic.monoql.catalog;
 import org.apache.calcite.schema.Table;
 
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /** A catalog: a set of metadata tables, and optionally the data behind them.
  *
@@ -93,6 +94,21 @@ public interface Catalog extends AutoCloseable {
    * and planned against, but a query that needs its rows fails. */
   default Optional<Table> bind(TableInfo table) {
     return Optional.empty();
+  }
+
+  /** Runs some work as a unit: if it throws, the changes it made to this
+   * catalog are undone, and until it returns, nobody else sees them. The
+   * engine runs each statement that changes something inside this, for
+   * every catalog of the session; so that a statement which is several
+   * changes (a table and its grants, say) happens entirely or not at all.
+   *
+   * <p>Work is run on the calling thread, and may itself call this.
+   *
+   * <p>By default the work is just run: a catalog that cannot undo does
+   * not pretend to, and a statement that fails part of the way through has
+   * happened part of the way. */
+  default <T> T atomically(Supplier<T> work) {
+    return work.get();
   }
 
   /** Releases resources. Called when the catalog is dropped from a session,

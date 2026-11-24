@@ -10,7 +10,7 @@ monoql is a fork of Apache Calcite. Read `README.md` for what it is,
 
 ```
 ./gradlew build                            # everything, a couple of minutes
-./gradlew :monoql-catalog:test :monoql-engine:test :monoql-jdbc:test :monoql-repl:test
+./gradlew :monoql-catalog:test :monoql-engine:test :monoql-jdbc:test :monoql-metastore:test :monoql-repl:test
 ./gradlew :monoql-engine:test --tests '*LoweringTest'
 ./gradlew :core:test                       # Calcite's suite, about a minute
 ./monoql -e "show tables"                  # the shell; builds first
@@ -59,5 +59,7 @@ JDK 21, which must be installed.
   the tables a statement names, and `Relation.authorize` each metadata row
   it writes. A new way to read or write data must go through one of them.
 - SQL view of a record: `RowCodec`.
-- SPI: `io.monoptic.monoql.catalog`. Reference implementation:
-  `catalog.memory.MemoryCatalog`.
+- SPI: `io.monoptic.monoql.catalog`. The rules between metadata tables:
+  `catalog.standard.StandardCatalog`, over a `Storage`. Reference
+  implementation: `catalog.memory.MemoryCatalog`, which is that over the
+  heap; `monoql-metastore` is that over a database.

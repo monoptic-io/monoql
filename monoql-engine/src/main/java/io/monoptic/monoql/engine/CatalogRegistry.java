@@ -20,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.function.Supplier;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.TreeSet;
 
@@ -79,6 +80,18 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
   synchronized Catalog catalog(String name) {
     final Mounted m = mounted.get(name);
     return m == null ? null : m.catalog;
+  }
+
+  /** Runs some work as a unit in every mounted catalog; see
+   * {@link Catalog#atomically}. Each catalog keeps its own promise: there
+   * is no undoing across two of them once one has finished. */
+  <T> T atomically(Supplier<T> work) {
+    Supplier<T> unit = work;
+    for (Catalog catalog : catalogs().values()) {
+      final Supplier<T> inner = unit;
+      unit = () -> catalog.atomically(inner);
+    }
+    return unit.get();
   }
 
   private static void checkName(String name) {
