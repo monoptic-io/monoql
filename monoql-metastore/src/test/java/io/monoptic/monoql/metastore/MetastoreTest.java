@@ -255,6 +255,25 @@ class MetastoreTest {
   }
 
   /** A change is a change to a row as it was read. */
+  /** Several statements in one unit are one transaction in the
+   * metastore. */
+  @Test void unitsOfSeveralStatements() {
+    final Session s = session("acme");
+    run(s, "create schema s");
+    assertThrows(NotFoundException.class, () ->
+        s.atomically(() -> {
+          run(s, "create table s.a (id int)", "create table s.b (id int)",
+              "create table nosuch.c (id int)");
+          return null;
+        }));
+    assertEquals(List.of(), rows(s, "show tables in s"));
+    s.atomically(() -> {
+      run(s, "create table s.a (id int)", "create table s.b (id int)");
+      return null;
+    });
+    assertEquals(2, rows(session("acme"), "show tables in lake.s").size());
+  }
+
   @Test void staleChangesAreRefused() {
     final MetastoreCatalogProvider provider = new MetastoreCatalogProvider();
     final Catalog one = provider.create("LAKE", options("acme"));

@@ -60,6 +60,8 @@ public final class Repl {
       "  -u, --user NAME       Act as this user, subject to grants, once the",
       "                        init script has run; see !as",
       "  -g, --group NAME      A group the user is in; repeatable",
+      "      --atomic          Run what -e, -f or a pipe gives as one unit:",
+      "                        all of it or, where catalogs can undo, none",
       "      --format FORMAT   table (default), vertical, csv or json",
       "      --no-color        Plain output",
       "      --no-timing       Do not print how long statements take",
@@ -76,6 +78,7 @@ public final class Repl {
     Formatter formatter = null;
     boolean color = System.getenv("NO_COLOR") == null;
     boolean timing = true;
+    boolean atomic = false;
     final List<Path> jars = new ArrayList<>();
     String user = null;
     final Set<String> groups = new LinkedHashSet<>();
@@ -113,6 +116,9 @@ public final class Repl {
           usage("Unknown format " + args[i]);
         }
         break;
+      case "--atomic":
+        atomic = true;
+        break;
       case "--no-color":
         color = false;
         break;
@@ -147,6 +153,9 @@ public final class Repl {
     }
     final Identity identity = user == null ? null : new Identity(user, groups);
     final boolean interactive = work.isEmpty() && System.console() != null;
+    if (atomic && interactive) {
+      usage("--atomic needs -e, -f or piped input");
+    }
     try (Session session = Monoql.builder().build()) {
       if (!interactive) {
         final PrintWriter out =
@@ -161,20 +170,31 @@ public final class Repl {
         if (identity != null) {
           shell.as(identity);
         }
-        if (work.isEmpty()) {
-          shell.run(new String(System.in.readAllBytes(),
-              StandardCharsets.UTF_8));
-        }
-        for (String[] w : work) {
-          if (shell.failed()) {
-            break;
+        final String piped =
+            work.isEmpty()
+                ? new String(System.in.readAllBytes(), StandardCharsets.UTF_8)
+                : null;
+        final Runnable all = () -> {
+          if (piped != null) {
+            shell.run(piped);
           }
-          if (w[0].equals("f")) {
-            shell.run(Path.of(w[1]));
-          } else {
-            shell.run(w[1].strip().startsWith("!") || w[1].strip().endsWith(";")
-                ? w[1] : w[1] + ";");
+          for (String[] w : work) {
+            if (shell.failed()) {
+              break;
+            }
+            if (w[0].equals("f")) {
+              shell.run(Path.of(w[1]));
+            } else {
+              shell.run(
+                  w[1].strip().startsWith("!") || w[1].strip().endsWith(";")
+                      ? w[1] : w[1] + ";");
+            }
           }
+        };
+        if (atomic) {
+          shell.atomically(all);
+        } else {
+          all.run();
         }
         out.flush();
         if (shell.failed()) {

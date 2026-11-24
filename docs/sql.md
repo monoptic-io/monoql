@@ -276,6 +276,11 @@ DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
   rejected.
 - monoql runs no jobs: it is a library, and has no process to run them in.
   In the in-memory catalog a job is a row that nothing acts on.
+- `CONTINUOUS` says the statement is to be run without end; the job that
+  keeps a `REFRESH CONTINUOUSLY` view up to date is. Otherwise it is run
+  once. Whatever runs a catalog's jobs can read
+  `SELECT statement FROM metadata.jobs WHERE continuous` and run them all
+  as one pipeline, if it likes.
 - `SUBMITTED_BY` is who submitted the job, and so whom to run it as. The
   statements that submit jobs fill it in with `CURRENT_USER`. A session
   that acts as someone may submit a job, or change what one does, only in

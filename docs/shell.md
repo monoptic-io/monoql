@@ -22,6 +22,7 @@ directly. It does not use JDBC.
 | `-j`, `--jar PATH` | Add a jar to the class path. Repeatable. This is how a JDBC driver for a `jdbc` catalog, or a jar containing a catalog provider, is made available. |
 | `-u`, `--user NAME` | Act as this user once the init script has run. See [Acting as a user](#acting-as-a-user). |
 | `-g`, `--group NAME` | A group the user is in. Repeatable. |
+| `--atomic` | Run everything given with `-e`, `-f` or a pipe as one unit: if any of it fails, catalogs that can undo forget the rest. See [Atomic statements](catalogs.md#atomic-statements). |
 | `--format FORMAT` | `table` (default), `vertical`, `csv` or `json`. |
 | `--no-color`, `--no-timing` | |
 

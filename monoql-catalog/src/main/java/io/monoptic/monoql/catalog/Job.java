@@ -21,12 +21,16 @@ import java.util.Map;
  * @param submittedBy Who submitted it, and so whom to run it as; null if
  *     nobody said
  * @param statement What to run
+ * @param continuous Whether the statement is to be run without end, as
+ *     the one that keeps a materialized view up to date is; otherwise it
+ *     is run once
  * @param options Parameters of this run
  * @param state How far it has got, in the words of whatever runs it; null
  *     if nothing has picked it up
  * @param error Why it failed, if it did */
 public record Job(String schemaName, String jobName, Instant submittedAt,
-    String submittedBy, String statement, Map<String, String> options, String state,
+    String submittedBy, String statement, boolean continuous,
+    Map<String, String> options, String state,
     Instant startedAt, Instant finishedAt, String error) implements MetaRow {
   public Job {
     Rows.required(schemaName, "schemaName");

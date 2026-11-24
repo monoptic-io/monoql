@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** The engine behind a {@link io.monoptic.monoql.Session}.
  *
@@ -302,6 +303,13 @@ public final class Engine implements Lowering.Context {
     return new Prepared(sql,
         validated.isA(SqlKind.DML) ? null : planner.rowType(validated),
         parameterType, parameters -> execute(sql, parameters));
+  }
+
+  /** Runs some work as one unit in every mounted catalog; see
+   * {@link Catalog#atomically}. The statements it executes are part of
+   * that unit, not units of their own. */
+  public <T> T atomically(Supplier<T> work) {
+    return registry.atomically(work);
   }
 
   /** Executes statements separated by semicolons, handing each result to

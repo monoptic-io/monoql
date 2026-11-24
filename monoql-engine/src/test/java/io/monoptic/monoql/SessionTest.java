@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import static io.monoptic.monoql.Sessions.rows;
 import static io.monoptic.monoql.Sessions.run;
@@ -245,6 +246,59 @@ class SessionTest {
     run(session, "create materialized view mv as select count(*) as c from t");
     assertThrows(NotFoundException.class,
         () -> session.execute("refresh materialized view nosuch"));
+  }
+
+  /** Statements run inside {@code atomically} are one unit to the
+   * catalogs, where each would otherwise be its own. */
+  @Test void units() {
+    final int[] units = {0};
+    final int[] depth = {0};
+    final MemoryCatalog catalog = new MemoryCatalog() {
+      @Override public <T> T atomically(Supplier<T> work) {
+        if (depth[0]++ == 0) {
+          units[0]++;
+        }
+        try {
+          return super.atomically(work);
+        } finally {
+          depth[0]--;
+        }
+      }
+    };
+    try (Session s = Monoql.builder().catalog("C", catalog).build()) {
+      run(s, "create schema s", "use c.s", "create table t (id int)");
+      units[0] = 0;
+      run(s, "create materialized view a refresh continuously as"
+              + " select id from t",
+          "create materialized view b refresh continuously as"
+              + " select id from t");
+      assertEquals(2, units[0]);
+
+      // A catalog that replans something when its jobs change is told
+      // once.
+      units[0] = 0;
+      s.atomically(() -> {
+        run(s, "create materialized view c refresh continuously as"
+                + " select id from t",
+            "create materialized view d refresh continuously as"
+                + " select id from t",
+            "insert into t values (1)");
+        return null;
+      });
+      assertEquals(1, units[0]);
+      assertEquals(List.of("[A]", "[B]", "[C]", "[D]"),
+          rows(s, "select job_name from metadata.jobs where continuous"
+              + " order by job_name"));
+
+      // And what is done to rows is undone together.
+      assertThrows(IllegalStateException.class, () ->
+          s.atomically(() -> {
+            run(s, "insert into t values (2)", "insert into t values (3)");
+            assertEquals(3, rows(s, "select * from t").size());
+            throw new IllegalStateException("changed my mind");
+          }));
+      assertEquals(List.of("[1]"), rows(s, "select * from t"));
+    }
   }
 
   /** A view that is refreshed continuously is filled by a job, which
