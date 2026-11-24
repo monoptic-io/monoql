@@ -142,6 +142,40 @@ class JdbcCatalogTest {
         inDatabase("SELECT * FROM SALES.ORDERS ORDER BY ID"));
   }
 
+  /** What is done in a unit is one transaction in the database: all of
+   * it, or none. */
+  @Test void unitsAreTransactions() throws SQLException {
+    final String all = "SELECT ID FROM SALES.ORDERS ORDER BY ID";
+    final JdbcCatalog catalog = new JdbcCatalog(url, null, "SA", "", null);
+    try (Session s = Monoql.builder().catalog("DB", catalog).build()) {
+      s.execute("use db.sales");
+      assertThrows(IllegalStateException.class, () ->
+          catalog.atomically(() -> {
+            s.execute("delete from orders where id = 1");
+            s.execute("insert into orders values (9, 'zed', 1.00)");
+            // Inside, it has happened.
+            final List<Object> ids = new ArrayList<>();
+            for (Object[] row : s.execute("select id from orders")) {
+              ids.add(row[0]);
+            }
+            assertEquals(3, ids.size());
+            assertTrue(ids.contains(9) && !ids.contains(1), ids.toString());
+            throw new IllegalStateException("changed my mind");
+          }));
+      assertEquals(List.of("[1]", "[2]", "[3]"), inDatabase(all));
+
+      catalog.atomically(() -> {
+        s.execute("delete from orders where id = 1");
+        s.execute("insert into orders values (9, 'zed', 1.00)");
+        return null;
+      });
+      assertEquals(List.of("[2]", "[3]", "[9]"), inDatabase(all));
+      // Outside a unit, each statement is its own.
+      s.execute("delete from orders where id = 9");
+      assertEquals(List.of("[2]", "[3]"), inDatabase(all));
+    }
+  }
+
   @Test void ddlReachesTheDatabase() throws SQLException {
     session.execute("create schema staging");
     session.execute("create table staging.events (id int not null primary "

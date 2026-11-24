@@ -35,10 +35,14 @@ import org.apache.calcite.sql.type.SqlTypeFactoryImpl;
 
 import org.apache.commons.dbcp2.BasicDataSource;
 
+import java.io.PrintWriter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +52,8 @@ import java.util.StringJoiner;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
@@ -83,7 +89,16 @@ public class JdbcCatalog implements Catalog {
   private final String id =
       "jdbc" + UUID.randomUUID().toString().replace("-", "");
   private final Map<String, String> keys = new ConcurrentHashMap<>();
+  /** The pool of connections to the database. */
+  private final DataSource pool;
+  /** What everything here, and Calcite's JDBC adapter, asks for
+   * connections: the pool, except inside a unit; see
+   * {@link #atomically}. */
   private final DataSource dataSource;
+  /** Whether the database can undo; if not, there are no units. */
+  private final boolean transactional;
+  /** The unit the calling thread is in, if any. */
+  private final ThreadLocal<Unit> unit = new ThreadLocal<>();
   private final SqlDialect dialect;
   private final String databaseCatalog;
   private final RelDataTypeFactory typeFactory =
@@ -91,17 +106,149 @@ public class JdbcCatalog implements Catalog {
 
   public JdbcCatalog(String url, String driver, String user, String password,
       String databaseCatalog) {
-    this.dataSource = JdbcSchema.dataSource(url, driver, user, password);
-    try (Connection connection = dataSource.getConnection()) {
+    this.pool = JdbcSchema.dataSource(url, driver, user, password);
+    this.dataSource = new UnitDataSource();
+    boolean transactional = false;
+    try (Connection connection = pool.getConnection()) {
       this.databaseCatalog =
           databaseCatalog != null ? databaseCatalog : connection.getCatalog();
+      transactional = connection.getMetaData().supportsTransactions();
     } catch (SQLException e) {
       close();
       throw new CatalogException("Cannot connect to " + url + ": "
           + e.getMessage(), e);
     }
+    this.transactional = transactional;
     this.dialect =
         JdbcSchema.createDialect(SqlDialectFactoryImpl.INSTANCE, dataSource);
+  }
+
+  // -- Units ----------------------------------------------------------------
+
+  /** Runs some work as a transaction in the database, if the database has
+   * them: everything this catalog and Calcite's JDBC adapter do on the
+   * calling thread until the work returns is done on one connection, and
+   * committed when it returns, or rolled back if it throws.
+   *
+   * <p>How much that covers is the database's business. Many commit
+   * whatever is in progress when they are given DDL, so that a statement
+   * which creates a table and then fills it is two units there. */
+  @Override public <T> T atomically(Supplier<T> work) {
+    if (!transactional || unit.get() != null) {
+      return work.get();
+    }
+    final Unit u = new Unit();
+    unit.set(u);
+    boolean done = false;
+    try {
+      final T result = work.get();
+      done = true;
+      return result;
+    } finally {
+      unit.remove();
+      u.end(done);
+    }
+  }
+
+  /** A transaction, once something has asked for a connection. */
+  private final class Unit {
+    private Connection connection;
+    /** What is handed out: the connection, which closing does not
+     * close. */
+    private Connection shared;
+
+    Connection connection() throws SQLException {
+      if (connection == null) {
+        final Connection c = pool.getConnection();
+        try {
+          c.setAutoCommit(false);
+        } catch (SQLException e) {
+          c.close();
+          throw e;
+        }
+        connection = c;
+        shared =
+            (Connection) Proxy.newProxyInstance(
+                JdbcCatalog.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                  if (method.getName().equals("close")) {
+                    return null;
+                  }
+                  try {
+                    return method.invoke(c, args);
+                  } catch (InvocationTargetException e) {
+                    throw e.getCause();
+                  }
+                });
+      }
+      return shared;
+    }
+
+    void end(boolean commit) {
+      if (connection == null) {
+        return;
+      }
+      try (Connection c = connection) {
+        if (commit) {
+          c.commit();
+        } else {
+          c.rollback();
+        }
+        c.setAutoCommit(true);
+      } catch (SQLException e) {
+        if (commit) {
+          throw new CatalogException("The database did not commit: "
+              + e.getMessage(), e);
+        }
+        // Rolling back is best effort; the database undoes what was not
+        // committed when the connection goes.
+      }
+    }
+  }
+
+  /** The pool; except that inside a unit, every request for a connection
+   * is given the unit's. */
+  private final class UnitDataSource implements DataSource {
+    @Override public Connection getConnection() throws SQLException {
+      final Unit u = unit.get();
+      return u == null ? pool.getConnection() : u.connection();
+    }
+
+    @Override public Connection getConnection(String username,
+        String password) throws SQLException {
+      return getConnection();
+    }
+
+    @Override public PrintWriter getLogWriter() throws SQLException {
+      return pool.getLogWriter();
+    }
+
+    @Override public void setLogWriter(PrintWriter out) throws SQLException {
+      pool.setLogWriter(out);
+    }
+
+    @Override public void setLoginTimeout(int seconds) throws SQLException {
+      pool.setLoginTimeout(seconds);
+    }
+
+    @Override public int getLoginTimeout() throws SQLException {
+      return pool.getLoginTimeout();
+    }
+
+    @Override public Logger getParentLogger()
+        throws SQLFeatureNotSupportedException {
+      return pool.getParentLogger();
+    }
+
+    @Override public <T> T unwrap(Class<T> iface) throws SQLException {
+      return pool.unwrap(iface);
+    }
+
+    @Override public boolean isWrapperFor(Class<?> iface)
+        throws SQLException {
+      return pool.isWrapperFor(iface);
+    }
   }
 
   /** Called by generated code to reach the data source of a schema. Not for
@@ -142,7 +289,7 @@ public class JdbcCatalog implements Catalog {
 
   @Override public void close() {
     REGISTRY.keySet().removeIf(key -> key.startsWith(id + "_"));
-    if (dataSource instanceof BasicDataSource basic) {
+    if (pool instanceof BasicDataSource basic) {
       try {
         basic.close();
       } catch (SQLException e) {

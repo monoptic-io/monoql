@@ -459,6 +459,18 @@ class MetastoreTest {
     assertEquals(List.of("[east, 15]", "[west, 107]"),
         rows(s, "select * from totals order by region"));
 
+    // A refresh is one transaction in the data catalog: if its query
+    // fails, the rows it had deleted are back.
+    run(s, "create materialized view shares as"
+        + " select id, 100 / amount as share from orders");
+    assertEquals(4, count(data, "s.shares"));
+    run(s, "insert into orders values (5, 'north', 0)");
+    assertThrows(RuntimeException.class,
+        () -> again.execute("refresh materialized view s.shares"));
+    assertEquals(4, count(data, "s.shares"));
+    run(s, "delete from orders where id = 5",
+        "refresh materialized view shares", "drop materialized view shares");
+
     // Another query is other rows, of another shape.
     run(s, "create or replace materialized view totals as"
         + " select count(*) as orders from orders");

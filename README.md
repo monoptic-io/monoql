@@ -142,7 +142,8 @@ than silent no-ops:
 
 - A materialized view keeps its rows in the in-memory catalog, and in a
   `metastore` catalog that has a data catalog; `REFRESH` deletes them and
-  inserts its query's, which only the in-memory catalog does atomically.
+  inserts its query's, as one unit: the in-memory catalog's own, or a
+  transaction in the `jdbc` data catalog's database.
   Elsewhere it reads as its definition.
   A view's `SCHEDULE` is a trigger that refreshes it, which nothing in this
   repository runs. No query is rewritten to use a

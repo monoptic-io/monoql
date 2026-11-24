@@ -234,16 +234,16 @@ returns. The default does neither, and says so by being the default.
 |---|---|
 | `metastore` | A database transaction. Writers to one tenant take turns, from each one's first change to its end, so that what a rule checked (the schema exists; the schema is empty) is still true when the change is made. Readers do not wait, and see what is committed. |
 | `memory` | For the rows of tables and materialized views: nobody else sees what a statement writes until it ends, and nothing is written if it fails. For metadata: writers take turns, but nothing is undone. |
-| `jdbc` | Each change is its own statement in the database. |
+| `jdbc` | A transaction in the database, if it has them: everything the statement does there, DDL, DCL and rows, is on one connection, committed at the end or rolled back. What that covers is up to the database; many commit whatever is in progress when given DDL, so `CREATE TABLE ... AS` is two units there. |
 
 Things to know:
 
 - **It is per catalog.** A statement that changes two catalogs is two
   units, and one can fail after the other has finished. In particular, a
-  `metastore` catalog's data catalog is not part of its transaction. Its
-  changes are made last, so a failure there undoes the metadata; but a
-  table created there stays created if the metadata then cannot be
-  committed.
+  `metastore` catalog and its data catalog are two: the data catalog's unit
+  is inside the metastore's and ends first, so a failure there undoes the
+  metadata as well; but what it did stays done if the metadata then cannot
+  be committed.
 - **A change is to a row as it was read.** An `UPDATE` or `DELETE` of a
   metadata row that someone else has changed since the statement read it
   fails, rather than overwrite what they did.
@@ -313,8 +313,9 @@ CREATE CATALOG lake WITH (type = 'metastore',
   with it. The table keeps the shape it was made with: if what the view's
   query returns changes shape (a `SELECT *` over a table that gains a
   column, say), `CREATE OR REPLACE` the view. A refresh is as atomic as the
-  data catalog makes a statement, which for `jdbc` is not at all: a reader
-  can find the view empty while it is refreshed. Without a data catalog,
+  data catalog makes a statement: with `jdbc`, a transaction in the
+  database, so a reader there sees the old rows or the new, and a refresh
+  whose query fails leaves the old. Without a data catalog,
   materialized views read as their definitions.
 - Other options: `driver`; and `create = false`, if the metastore's tables
   are made by someone else.
