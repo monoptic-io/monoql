@@ -97,7 +97,8 @@ the user's groups), and a hook to customize the Calcite `FrameworkConfig` the
 session plans with (`.configure(...)`). With an identity, statements are held
 to the grants in `METADATA.GRANTS`; see
 [Enforcement](docs/sql.md#enforcement). `session.as(identity)` gives another
-session over the same catalogs.
+session over the same catalogs, and `session.use(catalog, schema)` sets where
+unqualified names are looked up, as `USE` does.
 
 ## Documentation
 

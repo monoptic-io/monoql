@@ -424,6 +424,24 @@ class SessionTest {
     assertThrows(NotFoundException.class,
         () -> session.execute("set nosuch = 'x'"));
 
+    // From Java, names are taken as they are stored.
+    session.use("MEMORY", "MAIN");
+    assertEquals(List.of("[2]"), rows(session, "select * from z"));
+    session.use("C2", null);
+    assertEquals("C2", session.currentCatalog());
+    assertNull(session.currentSchema());
+    // All or nothing.
+    assertThrows(NotFoundException.class,
+        () -> session.use("MEMORY", "NOSUCH"));
+    assertThrows(NotFoundException.class, () -> session.use("c2", "X"));
+    assertEquals("C2", session.currentCatalog());
+    assertNull(session.currentSchema());
+    assertThrows(CatalogException.class, () -> session.use(null, "X"));
+    session.use(null, null);
+    assertNull(session.currentCatalog());
+    session.use("C2", "X");
+    assertEquals(List.of("[1]"), rows(session, "select * from y"));
+
     // Dropping the current catalog leaves the session with none.
     run(session, "drop catalog c2");
     assertNull(session.currentCatalog());
