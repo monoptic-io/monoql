@@ -78,7 +78,7 @@ public final class Monoql {
     UnaryOperator<Frameworks.ConfigBuilder> configurer = b -> b;
     String defaultCatalog;
     String defaultSchema;
-    String user;
+    Identity identity;
 
     private Builder() {
     }
@@ -111,14 +111,11 @@ public final class Monoql {
      * table takes {@code SELECT} on it, and so on (see docs/sql.md).
      *
      * <p>By default a session acts as nobody, and nothing is checked. That
-     * is how grants are set up in the first place. monoql does not
-     * authenticate anyone: whoever builds the session vouches for the
-     * name.
-     *
-     * @param user The name as it appears in grants. An unquoted name in a
-     *     {@code GRANT} statement is stored in upper case */
-    public Builder user(String user) {
-      this.user = user;
+     * is how grants are set up in the first place. To serve several users
+     * from the same catalogs, build one session and derive the others
+     * with {@link Session#as}. */
+    public Builder identity(Identity identity) {
+      this.identity = identity;
       return this;
     }
 

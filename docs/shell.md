@@ -20,6 +20,8 @@ directly. It does not use JDBC.
 | `-f`, `--file FILE` | Run a script, then exit. Repeatable. |
 | `-i`, `--init FILE` | Run a script before starting. Default: `~/.monoql/init.sql`, if it exists. |
 | `-j`, `--jar PATH` | Add a jar to the class path. Repeatable. This is how a JDBC driver for a `jdbc` catalog, or a jar containing a catalog provider, is made available. |
+| `-u`, `--user NAME` | Act as this user once the init script has run. See [Acting as a user](#acting-as-a-user). |
+| `-g`, `--group NAME` | A group the user is in. Repeatable. |
 | `--format FORMAT` | `table` (default), `vertical`, `csv` or `json`. |
 | `--no-color`, `--no-timing` | |
 
@@ -52,6 +54,7 @@ a script stops at its first failure.
 | `!catalogs`, `!schemas`, `!tables`, `!views`, `!functions`, `!triggers`, `!roles`, `!users`, `!grants`, `!settings` | Shorthand for the `SHOW` statement of the same name; anything after the command is appended, e.g. `!tables in sales`. |
 | `!describe table` | `DESCRIBE table`. |
 | `!use [catalog.]schema` | `USE`. |
+| `!as [user [group ...]]` | Act as a user, in those groups; with no user, as nobody. See [Acting as a user](#acting-as-a-user). |
 | `!metadata` | List the tables of the `METADATA` schema, with their columns. |
 | `!lower statement` | Print the DML that a statement is shorthand for, without running it. |
 | `!explain statement` | Print the plan. For a DDL statement, the plan of what it lowers to. |
@@ -60,3 +63,38 @@ a script stops at its first failure.
 | `!timing [on\|off]` | Show or set timing. |
 | `!verbose [on\|off]` | Show or set printing of stack traces with errors. |
 | `!history`, `!clear` | |
+
+## Acting as a user
+
+The shell starts acting as nobody, which means nothing is checked: that is
+how tables and grants get set up. `!as` switches to acting as a user, held to
+the grants (see [Enforcement](sql.md#enforcement)), and `!as` on its own
+switches back. The prompt shows who you are.
+
+```
+MEMORY.MAIN> create table orders (id int);
+MEMORY.MAIN> grant select on orders to group analysts;
+MEMORY.MAIN> !as ann analysts
+Acting as user ANN, in ANALYSTS; not authenticated
+ANN@MEMORY.MAIN> select * from orders;
+ANN@MEMORY.MAIN> drop table orders;
+Error: User ANN lacks OWNERSHIP on MEMORY.MAIN.ORDERS, which changing METADATA.TABLES takes
+ANN@MEMORY.MAIN> !as
+Acting as nobody; nothing is checked
+```
+
+Names are read as SQL reads them: folded to upper case unless quoted, so
+`!as ann` is the `ANN` of `GRANT ... TO USER ann`, and `!as 'ann@example.com'`
+is taken as written.
+
+`--user` and `--group` do the same at startup, *after* the init script has
+run, so that the script can do the setting up:
+
+```
+$ ./monoql --user ann --group analysts
+```
+
+**This is impersonation, not security.** Nothing checks that you are the
+user you name, and you can switch back whenever you like. It is there for
+trying grants out. The shell holds the catalogs itself, so it could not
+enforce anything against its own user; that takes a server between the two.

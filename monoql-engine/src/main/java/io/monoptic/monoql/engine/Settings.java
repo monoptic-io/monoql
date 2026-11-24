@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Key;
@@ -21,11 +22,11 @@ final class Settings implements MetaTable<Setting> {
   private final CatalogRegistry registry;
   private String catalog;
   private String schema;
-  private final String user;
+  private final Identity identity;
 
-  Settings(CatalogRegistry registry, String user) {
+  Settings(CatalogRegistry registry, Identity identity) {
     this.registry = registry;
-    this.user = user;
+    this.identity = identity;
   }
 
   synchronized String catalog() {
@@ -51,7 +52,11 @@ final class Settings implements MetaTable<Setting> {
   @Override public synchronized Iterable<Setting> scan() {
     return List.of(new Setting(Setting.CATALOG, catalog),
         new Setting(Setting.SCHEMA, schema),
-        new Setting(Setting.USER, user));
+        new Setting(Setting.USER,
+            identity == null ? null : identity.user()),
+        new Setting(Setting.GROUPS,
+            identity == null ? null
+                : String.join(", ", identity.groups())));
   }
 
   @Override public synchronized void update(Setting before, Setting after) {
@@ -90,8 +95,9 @@ final class Settings implements MetaTable<Setting> {
       schema = value;
       break;
     case Setting.USER:
+    case Setting.GROUPS:
       throw new CatalogException(
-          "The user of a session cannot be changed");
+          "The identity of a session cannot be changed");
     default:
       throw NotFoundException.of(NAME, before.key());
     }

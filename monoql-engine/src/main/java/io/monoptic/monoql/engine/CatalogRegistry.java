@@ -20,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.TreeSet;
 
 /** The catalogs mounted in a session. This is {@code METADATA.CATALOGS}:
@@ -37,16 +38,24 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
 
   private final Map<String, Mounted> mounted = new LinkedHashMap<>();
   private final Map<String, CatalogProvider> providers = new LinkedHashMap<>();
-  private final Runnable onChange;
+  /** Told when a catalog is mounted, replaced or dropped. */
+  private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
-  CatalogRegistry(List<CatalogProvider> extraProviders, Runnable onChange) {
+  CatalogRegistry(List<CatalogProvider> extraProviders) {
     for (CatalogProvider p : ServiceLoader.load(CatalogProvider.class)) {
       providers.put(p.type().toLowerCase(Locale.ROOT), p);
     }
     for (CatalogProvider p : extraProviders) {
       providers.put(p.type().toLowerCase(Locale.ROOT), p);
     }
-    this.onChange = onChange;
+  }
+
+  void addListener(Runnable listener) {
+    listeners.add(listener);
+  }
+
+  void removeListener(Runnable listener) {
+    listeners.remove(listener);
   }
 
   /** Mounts an existing catalog object. */
@@ -110,7 +119,7 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
       throw AlreadyExistsException.of(NAME, row.key());
     }
     mounted.put(row.catalogName(), new Mounted(row, create(row)));
-    onChange.run();
+    listeners.forEach(Runnable::run);
   }
 
   @Override public synchronized void update(CatalogInfo before,
@@ -133,7 +142,7 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
     final Catalog replacement = create(after);
     close(m.catalog);
     mounted.put(after.catalogName(), new Mounted(after, replacement));
-    onChange.run();
+    listeners.forEach(Runnable::run);
   }
 
   @Override public synchronized void delete(CatalogInfo row) {
@@ -142,7 +151,7 @@ final class CatalogRegistry implements MetaTable<CatalogInfo> {
       throw NotFoundException.of(NAME, row.key());
     }
     close(m.catalog);
-    onChange.run();
+    listeners.forEach(Runnable::run);
   }
 
   synchronized void closeAll() {

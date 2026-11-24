@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.repl;
 
+import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.Result;
 import io.monoptic.monoql.Session;
 
@@ -17,10 +18,14 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
 import java.util.concurrent.CancellationException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** The shell, minus the terminal: takes one input at a time (a
  * {@code !command}, or SQL), runs it against a {@link Session}, and prints
@@ -59,6 +64,10 @@ final class Shell {
               "Set the current catalog and schema", "USE"),
           new Command("settings", "", "Show session settings",
               "SHOW SETTINGS"),
+          new Command("as", "[user [group ...]]",
+              "Act as a user, subject to grants; with no user, as nobody,"
+                  + " unchecked",
+              null),
           new Command("metadata", "",
               "List the tables of the METADATA schema, and their columns",
               null),
@@ -79,7 +88,11 @@ final class Shell {
               null),
           new Command("clear", "", "Clear the screen", null));
 
-  private final Session session;
+  /** The session the shell was given, which acts as nobody. */
+  private final Session root;
+  /** The session statements run in: {@link #root}, or one derived from it
+   * by {@code !as}. */
+  private Session session;
   private final PrintWriter out;
   private final Style style;
   private Formatter formatter = Formatter.TABLE;
@@ -88,6 +101,7 @@ final class Shell {
   private boolean failed;
 
   Shell(Session session, PrintWriter out, boolean color) {
+    this.root = session;
     this.session = session;
     this.out = out;
     this.style = new Style(color);
@@ -116,7 +130,35 @@ final class Shell {
     return failed;
   }
 
-  /** The prompt: the current catalog and schema. */
+  /** Switches to acting as someone, over the same catalogs; or, given
+   * null, back to acting as nobody.
+   *
+   * <p>This is impersonation, for trying grants out. Nothing has checked
+   * that whoever is at the keyboard is that user, and nothing could stop
+   * them switching back. */
+  void as(Identity identity) {
+    if (session != root) {
+      session.close();
+    }
+    session = identity == null ? root : root.as(identity);
+  }
+
+  /** Reads names as SQL does: folded to upper case, unless quoted (with
+   * either kind of quote). */
+  static List<String> names(String args) {
+    final List<String> names = new ArrayList<>();
+    final Matcher m =
+        Pattern.compile("\"([^\"]*)\"|'([^']*)'|([^\\s,]+)").matcher(args);
+    while (m.find()) {
+      names.add(m.group(1) != null ? m.group(1)
+          : m.group(2) != null ? m.group(2)
+          : m.group(3).toUpperCase(Locale.ROOT));
+    }
+    return names;
+  }
+
+  /** The prompt: who the shell acts as, if anyone, and the current catalog
+   * and schema. */
   String prompt() {
     final StringJoiner j = new StringJoiner(".");
     if (session.currentCatalog() != null) {
@@ -125,7 +167,9 @@ final class Shell {
         j.add(session.currentSchema());
       }
     }
-    return (j.length() == 0 ? "monoql" : j.toString()) + "> ";
+    final Identity identity = session.identity();
+    return (identity == null ? "" : identity.user() + "@")
+        + (j.length() == 0 ? "monoql" : j.toString()) + "> ";
   }
 
   /** Runs one input.
@@ -210,6 +254,18 @@ final class Shell {
       return true;
     case "metadata":
       metadata();
+      return true;
+    case "as":
+      final List<String> names = names(args);
+      as(names.isEmpty() ? null
+          : new Identity(names.get(0),
+              new LinkedHashSet<>(names.subList(1, names.size()))));
+      final Identity identity = session.identity();
+      out.println(identity == null ? "Acting as nobody; nothing is checked"
+          : "Acting as user " + identity.user()
+              + (identity.groups().isEmpty() ? ""
+                  : ", in " + String.join(", ", identity.groups()))
+              + "; not authenticated");
       return true;
     case "lower":
       for (String sql : session.lower(requireArgs(name, args)).sql()) {

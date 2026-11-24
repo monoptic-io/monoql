@@ -4,6 +4,7 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.MonoqlException;
 import io.monoptic.monoql.Result;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
@@ -53,8 +54,11 @@ import java.util.function.Consumer;
  * metadata table ends in calls on the catalog SPI. */
 public final class Engine implements Lowering.Context {
   private final FrameworkConfig config;
+  private final Identity identity;
   private final String user;
   private final CatalogRegistry registry;
+  private final boolean ownsCatalogs;
+  private final Runnable catalogsChanged = () -> settings().validate();
   private final Authorizer authorizer;
   private final Settings settings;
   private final CalciteSchema rootSchema;
@@ -64,18 +68,26 @@ public final class Engine implements Lowering.Context {
   /** Stops the statement that is running; replaced for each statement. */
   private volatile AtomicBoolean cancel = new AtomicBoolean();
 
-  /** Creates an engine.
+  /** Creates an engine with catalogs of its own.
    *
-   * @param user Who the session acts as, or null. With a user, statements
-   *     are checked against the grants of each catalog; see
+   * @param identity Who the session acts as, or null. With an identity,
+   *     statements are checked against the grants of each catalog; see
    *     {@link Authorizer} */
   public Engine(FrameworkConfig config, List<CatalogProvider> providers,
-      String user) {
+      Identity identity) {
+    this(config, new CatalogRegistry(providers), true, identity);
+  }
+
+  private Engine(FrameworkConfig config, CatalogRegistry registry,
+      boolean ownsCatalogs, Identity identity) {
     this.config = config;
-    this.user = user;
-    this.registry = new CatalogRegistry(providers, this::catalogsChanged);
-    this.authorizer = new Authorizer(user, registry);
-    this.settings = new Settings(registry, user);
+    this.identity = identity;
+    this.user = identity == null ? null : identity.user();
+    this.registry = registry;
+    this.ownsCatalogs = ownsCatalogs;
+    registry.addListener(catalogsChanged);
+    this.authorizer = new Authorizer(identity, registry);
+    this.settings = new Settings(registry, identity);
     this.metadata = new MetadataSchema(registry, settings, this::viewType);
     // Not cached: the catalogs are the source of truth.
     this.rootSchema =
@@ -83,8 +95,14 @@ public final class Engine implements Lowering.Context {
             new CatalogSchemas.Root(registry, metadata, this::viewType));
   }
 
-  private void catalogsChanged() {
-    settings.validate();
+  /** Creates an engine over the same catalogs as this one, acting as
+   * someone else, and starting in the same catalog and schema. Catalogs
+   * mounted or dropped through either are seen by both; closing the new
+   * engine does not close them. */
+  public Engine as(Identity identity) {
+    final Engine engine = new Engine(config, registry, false, identity);
+    engine.use(settings.catalog(), settings.schema());
+    return engine;
   }
 
   public void mount(String name, Catalog catalog) {
@@ -97,6 +115,11 @@ public final class Engine implements Lowering.Context {
         new Setting(Setting.CATALOG, catalog));
     settings.update(new Setting(Setting.SCHEMA, null),
         new Setting(Setting.SCHEMA, schema));
+  }
+
+  /** Who the session acts as; null if nobody. */
+  public Identity identity() {
+    return identity;
   }
 
   public String currentCatalog() {
@@ -115,8 +138,15 @@ public final class Engine implements Lowering.Context {
     return config;
   }
 
+  private Settings settings() {
+    return settings;
+  }
+
   public void close() {
-    registry.closeAll();
+    registry.removeListener(catalogsChanged);
+    if (ownsCatalogs) {
+      registry.closeAll();
+    }
   }
 
   // -- Lowering.Context -----------------------------------------------------

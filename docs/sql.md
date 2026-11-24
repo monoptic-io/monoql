@@ -236,12 +236,18 @@ grantee: [USER | ROLE | GROUP] name
 
 ### Enforcement
 
-A session may act as a user (`Monoql.builder().user("ANN")`), and then every
-statement is checked against the grants. A session with no user is not
-checked; that is how grants are set up in the first place. monoql does not
-authenticate anyone: the application that builds the session vouches for the
-name. The user is shown by `SHOW SETTINGS` and `CURRENT_USER`, and cannot be
-changed.
+A session may act as someone
+(`Monoql.builder().identity(Identity.of("ANN", "ANALYSTS"))`: a user, and the
+groups the user is in), and then every statement is checked against the
+grants. A session with no identity is not checked; that is how grants are
+set up in the first place. `session.as(identity)` gives another session over
+the same catalogs, which is how an application serves many users.
+
+monoql does not authenticate anyone, and does not keep group membership: the
+application that builds the session has established both, and vouches for
+them. Nor can it enforce anything against the application itself, which holds
+the catalogs. The identity is shown by `SHOW SETTINGS` (`user`, `groups`) and
+`CURRENT_USER`, and cannot be changed.
 
 | To | The user needs |
 |---|---|
@@ -268,10 +274,11 @@ changed.
 - **Grants belong to an object, not to its name.** Dropping something
   deletes the grants on it, and renaming it moves them, whoever does it.
   Moving a table to another schema takes `CREATE TABLE` there.
-- A grant applies to a user if its grantee is that user, or a role the user
-  holds directly or through other roles (`GRANT ROLE`). A grantee recorded
-  without a kind matches either. Names are compared exactly, and an unquoted
-  name in a statement is stored in upper case.
+- A grant applies to a user if its grantee is that user, a group the user
+  is in, or a role that any of those holds, directly or through other roles
+  (`GRANT ROLE`). A grantee recorded without a kind matches any of them.
+  Names are compared exactly, and an unquoted name in a statement is stored
+  in upper case.
 - A view is read with its definer's rights: `SELECT` on the view is enough,
   whatever it reads. To define one, you need `SELECT` on what it reads.
 - Because a statement *is* its DML, `DROP TABLE t` and
@@ -282,8 +289,7 @@ changed.
   that does not (the `jdbc` catalog, for example) is left to its backend.
 
 Not there yet: separate privileges for the different ways of changing an
-object (they all take ownership); `EXECUTE` on functions; `GROUP` grantees,
-which match nobody because monoql has no source of group membership; and
+object (they all take ownership); `EXECUTE` on functions; and
 restricting who can read metadata, which includes view definitions and the
 grants themselves.
 
