@@ -30,7 +30,7 @@ public final class Session implements AutoCloseable {
             builder.identity);
     String catalog = builder.defaultCatalog;
     String schema = builder.defaultSchema;
-    if (builder.catalogs.isEmpty()) {
+    if (builder.catalogs.isEmpty() && !builder.bare) {
       final MemoryCatalog memory = new MemoryCatalog();
       memory.schemas().insert(
           new SchemaInfo(Monoql.DEFAULT_SCHEMA, null, Map.of()));

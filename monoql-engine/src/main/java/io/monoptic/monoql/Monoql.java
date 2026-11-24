@@ -79,6 +79,7 @@ public final class Monoql {
     String defaultCatalog;
     String defaultSchema;
     Identity identity;
+    boolean bare;
 
     private Builder() {
     }
@@ -88,6 +89,15 @@ public final class Monoql {
      * called {@link #DEFAULT_SCHEMA}. */
     public Builder catalog(String name, Catalog catalog) {
       catalogs.put(name, catalog);
+      return this;
+    }
+
+    /** Builds a session with no catalogs at all, if none is mounted,
+     * rather than the in-memory one it would otherwise get: for a session
+     * whose catalogs are to come from {@code CREATE CATALOG}. It has no
+     * current catalog until it is given one. */
+    public Builder bare() {
+      this.bare = true;
       return this;
     }
 

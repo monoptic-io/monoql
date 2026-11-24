@@ -6,19 +6,18 @@ package io.monoptic.monoql.metastore;
 
 import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.Catalog;
-import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Column;
 import io.monoptic.monoql.catalog.SchemaInfo;
 import io.monoptic.monoql.catalog.TableInfo;
 import io.monoptic.monoql.catalog.standard.StandardCatalog;
 
 import org.apache.calcite.schema.Table;
-import org.apache.commons.dbcp2.BasicDataSource;
 
-import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import javax.sql.DataSource;
 
 /** A catalog whose metadata is durable: every metadata table, with the
  * rules of {@link StandardCatalog}, kept in a SQL database.
@@ -37,12 +36,14 @@ import java.util.Optional;
  * metadata then cannot be committed, what the data catalog did stays
  * done. */
 public final class MetastoreCatalog extends StandardCatalog {
-  private final BasicDataSource dataSource;
+  private final Runnable release;
   private final Catalog data;
 
   /** Creates a catalog.
    *
-   * @param dataSource The metastore; closed with the catalog
+   * @param dataSource The metastore
+   * @param release Called when the catalog is closed, and has no more use
+   *     for the data source
    * @param tenant Whose metadata this is
    * @param name The catalog's name, which is part of what its metadata is
    *     stored under: a tenant may have several catalogs
@@ -50,10 +51,10 @@ public final class MetastoreCatalog extends StandardCatalog {
    *     not there
    * @param data Where the rows of tables are; closed with the catalog.
    *     Null if nowhere */
-  MetastoreCatalog(BasicDataSource dataSource, String tenant, String name,
-      boolean create, Catalog data) {
+  MetastoreCatalog(DataSource dataSource, Runnable release, String tenant,
+      String name, boolean create, Catalog data) {
     super(new SqlStorage(dataSource, tenant, name, create));
-    this.dataSource = dataSource;
+    this.release = release;
     this.data = data;
   }
 
@@ -107,10 +108,7 @@ public final class MetastoreCatalog extends StandardCatalog {
   @Override public void close() {
     try {
       super.close();
-      dataSource.close();
-    } catch (SQLException e) {
-      throw new CatalogException("Closing the metastore failed: "
-          + e.getMessage(), e);
+      release.run();
     } finally {
       if (data != null) {
         data.close();

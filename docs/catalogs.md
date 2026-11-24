@@ -288,6 +288,8 @@ CREATE CATALOG lake WITH (type = 'metastore',
 - **Statements are atomic** in the metastore: see below.
 - Other options: `driver`; and `create = false`, if the metastore's tables
   are made by someone else.
+- Catalogs in one metastore share one pool of connections, however many
+  tenants they are for.
 
 The metastore is two tables, which the catalog creates if it may:
 
