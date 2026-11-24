@@ -18,13 +18,15 @@ import java.util.Map;
  * @param jobName A name, which need not be unique: firing a trigger
  *     twice submits two jobs of the trigger's name
  * @param submittedAt When it was submitted, which tells such jobs apart
+ * @param submittedBy Who submitted it, and so whom to run it as; null if
+ *     nobody said
  * @param statement What to run
  * @param options Parameters of this run
  * @param state How far it has got, in the words of whatever runs it; null
  *     if nothing has picked it up
  * @param error Why it failed, if it did */
 public record Job(String schemaName, String jobName, Instant submittedAt,
-    String statement, Map<String, String> options, String state,
+    String submittedBy, String statement, Map<String, String> options, String state,
     Instant startedAt, Instant finishedAt, String error) implements MetaRow {
   public Job {
     Rows.required(schemaName, "schemaName");

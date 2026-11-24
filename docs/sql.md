@@ -257,8 +257,10 @@ whatever stands behind the catalog. There is no syntax for one. It is a row
 of `METADATA.JOBS`:
 
 ```sql
-INSERT INTO metadata.jobs (schema_name, job_name, submitted_at, statement)
-VALUES ('S', 'nightly', CURRENT_TIMESTAMP, 'REFRESH MATERIALIZED VIEW s.totals');
+INSERT INTO metadata.jobs
+  (schema_name, job_name, submitted_at, submitted_by, statement)
+VALUES ('S', 'nightly', CURRENT_TIMESTAMP, CURRENT_USER,
+  'REFRESH MATERIALIZED VIEW s.totals');
 SELECT job_name, state, finished_at, error FROM metadata.jobs;
 DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
 ```
@@ -274,7 +276,13 @@ DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
   rejected.
 - monoql runs no jobs: it is a library, and has no process to run them in.
   In the in-memory catalog a job is a row that nothing acts on.
-- In a catalog with grants, writing `JOBS` takes ownership of the schema.
+- `SUBMITTED_BY` is who submitted the job, and so whom to run it as. The
+  statements that submit jobs fill it in with `CURRENT_USER`. A session
+  that acts as someone may submit a job, or change what one does, only in
+  its own name, whatever the catalog's grants; and nobody changes
+  `SUBMITTED_BY` afterwards.
+- In a catalog with grants, writing `JOBS` also takes ownership of the
+  schema, which is enough to cancel anyone's job there.
 
 ## Roles, users and privileges
 
