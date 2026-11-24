@@ -114,7 +114,7 @@ with equal keys are the same object.
 | `SCHEMAS` | `SchemaInfo(schemaName, comment, options)` | schema |
 | `TABLES` | `TableInfo(schemaName, tableName, columns, primaryKey, partitionKeys, comment, options)` | schema, table |
 | `VIEWS` | `ViewInfo(schemaName, viewName, columnNames, definition, comment)` | schema, view |
-| `MATERIALIZED_VIEWS` | `MaterializedViewInfo(schemaName, viewName, columnNames, definition, schedule, paused, comment, options)` | schema, view |
+| `MATERIALIZED_VIEWS` | `MaterializedViewInfo(schemaName, viewName, columnNames, definition, schedule, continuous, paused, comment, options)` | schema, view |
 | `PARTITIONS` | `PartitionInfo(schemaName, tableName, spec, options)` | schema, table, spec |
 | `FUNCTIONS` | `FunctionInfo(schemaName, functionName, functionLanguage, definition, comment, options)` | schema, function |
 | `TRIGGERS` | `TriggerInfo(schemaName, triggerName, tableSchema, tableName, timing, events, schedule, action, paused, comment, options)` | schema, trigger |

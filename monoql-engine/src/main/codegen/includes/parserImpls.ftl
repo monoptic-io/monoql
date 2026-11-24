@@ -316,6 +316,7 @@ SqlCreate SqlCreateView(Span s, boolean replace) :
     final SqlIdentifier id;
     SqlNodeList columnList = SqlNodeList.EMPTY;
     String schedule = null;
+    boolean continuous = false;
     final String comment;
     Map<String, String> opts = new LinkedHashMap<String, String>();
     final SqlNode query;
@@ -333,6 +334,14 @@ SqlCreate SqlCreateView(Span s, boolean replace) :
             }
         }
         [ <EQ> ] n = StringLiteral() { schedule = SqlClauses.text(n); }
+    |
+        <REFRESH> <CONTINUOUSLY> {
+            if (!materialized) {
+                throw new ParseException(
+                    "REFRESH CONTINUOUSLY requires CREATE MATERIALIZED VIEW");
+            }
+            continuous = true;
+        }
     ]
     comment = CommentOpt()
     [
@@ -347,7 +356,8 @@ SqlCreate SqlCreateView(Span s, boolean replace) :
     <AS> query = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY)
     {
         return new SqlCreateView(s.end(this), replace, ifNotExists,
-            materialized, id, columnList, schedule, comment, opts, query);
+            materialized, id, columnList, schedule, continuous, comment, opts,
+            query);
     }
 }
 

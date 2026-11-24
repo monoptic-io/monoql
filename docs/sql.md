@@ -127,7 +127,8 @@ CREATE [OR REPLACE] VIEW [IF NOT EXISTS] name [(column [, ...])]
 DROP VIEW [IF EXISTS] name
 
 CREATE [OR REPLACE] MATERIALIZED VIEW [IF NOT EXISTS] name [(column [, ...])]
-  [SCHEDULE 'cron'] [COMMENT 'text'] [WITH (...)] AS query
+  [SCHEDULE 'cron' | REFRESH CONTINUOUSLY] [COMMENT 'text'] [WITH (...)]
+  AS query
 DROP MATERIALIZED VIEW [IF EXISTS] name
 PAUSE MATERIALIZED VIEW name
 RESUME MATERIALIZED VIEW name
@@ -139,7 +140,8 @@ REFRESH MATERIALIZED VIEW name
 | `CREATE VIEW` | `INSERT INTO METADATA.VIEWS` |
 | `DROP VIEW` | `DELETE FROM METADATA.VIEWS` |
 | `CREATE MATERIALIZED VIEW` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO` the view, of its query |
-| `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS` |
+| `CREATE MATERIALIZED VIEW ... REFRESH CONTINUOUSLY` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO METADATA.JOBS`, of that `INSERT INTO` the view |
+| `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS`; before it, if the view is continuous, `DELETE FROM METADATA.JOBS` |
 | `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED` |
 | `REFRESH` | `DELETE FROM` the view, then `INSERT INTO` it, of its query |
 
@@ -177,6 +179,23 @@ REFRESH MATERIALIZED VIEW totals;          -- runs the query again
   query, like a view. The step that fills it when it is created is
   skipped, and `REFRESH` is an error: there is nothing to refresh.
 - A query is never rewritten to read a materialized view it does not name.
+
+`REFRESH CONTINUOUSLY` makes a view that is kept up to date all the time,
+which is what to ask for over a stream:
+
+```sql
+CREATE MATERIALIZED VIEW clicks_by_page REFRESH CONTINUOUSLY AS
+  SELECT page, COUNT(*) AS clicks FROM kafka.web.clicks GROUP BY page;
+```
+
+- The engine does not fill such a view. The `INSERT INTO` the view, of its
+  query, that would have filled it once is submitted as a [job](#jobs) of
+  the view's name, for whatever runs the catalog's jobs to run and never
+  finish. What "continuously" amounts to is up to that.
+- The job is cancelled when the view is dropped or replaced.
+- `REFRESH MATERIALIZED VIEW` on such a view is an error.
+- It needs a catalog with a `JOBS` table. In the in-memory catalog nothing
+  runs jobs, so the view stays empty.
 
 ## Functions
 

@@ -48,6 +48,7 @@ class ParserTest {
       "create view v as select 1 as a",
       "create or replace view s.v (x, y) comment 'c' as select a, b from t",
       "create materialized view mv as select 1 as a",
+      "create materialized view mv refresh continuously comment 'c' as select a from t",
       "create materialized view if not exists mv (x) schedule '@daily' comment 'c' options (k = 'v') as select a from t",
       "create function f as 'com.example.F'",
       "create or replace function s.f language python comment 'c' with (k = 'v') as 'def f(): pass'",
@@ -155,6 +156,9 @@ class ParserTest {
       "show columns",
       "pause table t",
       "fire materialized view mv",
+      "create view v refresh continuously as select 1 as a",
+      "create materialized view mv schedule '@daily' refresh continuously as select 1 as a",
+      "create materialized view mv refresh as select 1 as a",
       "refresh trigger tr",
       "drop column c"})
   void rejected(String sql) {
