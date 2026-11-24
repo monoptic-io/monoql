@@ -88,6 +88,25 @@ class JdbcCatalogTest {
     return rows;
   }
 
+  /** Parameters reach the database as parameters. */
+  @Test void parameters() throws SQLException {
+    final List<String> found = new ArrayList<>();
+    for (Object[] row
+        : session.execute("select customer from orders where id = ?"
+            + " and amount > ?", 2, 1)) {
+      found.add(Arrays.deepToString(row));
+    }
+    assertEquals(List.of("[bob]"), found);
+    final String plan =
+        session.explain("select customer from orders where id = ?");
+    assertTrue(plan.contains("JdbcFilter(condition=[=($0, ?0)])"), plan);
+    assertEquals(1,
+        session.execute("update orders set customer = ? where id = ?",
+            "robert", 2).updateCount());
+    assertEquals(List.of("[robert]"),
+        inDatabase("SELECT customer FROM sales.orders WHERE id = 2"));
+  }
+
   @Test void readsMetadataAndData() {
     assertTrue(rows("show schemas").contains("[SALES, null]"));
     assertEquals(List.of("[ORDERS, null]"), rows("show tables"));

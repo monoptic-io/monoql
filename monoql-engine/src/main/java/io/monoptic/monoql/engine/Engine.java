@@ -6,6 +6,7 @@ package io.monoptic.monoql.engine;
 
 import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.MonoqlException;
+import io.monoptic.monoql.Prepared;
 import io.monoptic.monoql.Result;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.Catalog;
@@ -67,6 +68,8 @@ public final class Engine implements Lowering.Context {
   private int viewDepth;
   /** Stops the statement that is running; replaced for each statement. */
   private volatile AtomicBoolean cancel = new AtomicBoolean();
+  /** The values of the dynamic parameters of the statement being run. */
+  private List<Object> bound = List.of();
 
   /** Creates an engine with catalogs of its own.
    *
@@ -246,8 +249,44 @@ public final class Engine implements Lowering.Context {
 
   // -- Execution ------------------------------------------------------------
 
-  public Result execute(String sql) {
-    return execute(parse(sql));
+  /** Executes one statement.
+   *
+   * @param parameters One value for each {@code ?} in the statement */
+  public Result execute(String sql, Object... parameters) {
+    return execute(parse(sql), parameters);
+  }
+
+  /** Checks a statement without running it, and returns what it will
+   * return and what parameters it takes. */
+  public Prepared prepare(String sql) {
+    final RelDataTypeFactory typeFactory = planner().typeFactory();
+    final RelDataType none = typeFactory.builder().build();
+    SqlNode node = parse(sql);
+    if (node instanceof SqlExplain) {
+      return new Prepared(sql, planType(typeFactory), none,
+          parameters -> execute(sql, parameters));
+    }
+    final Lowered lowered = lowering.lower(node);
+    RelDataType parameterType = none;
+    if (lowered != null) {
+      // What the statement returns is what its last step returns. A step
+      // that is not a query may depend on the steps before it, and cannot
+      // be checked until they have run.
+      final List<Step> steps = lowered.steps();
+      node = parse(steps.get(steps.size() - 1).sql());
+      if (!node.isA(SqlKind.QUERY)) {
+        return new Prepared(sql, null, none,
+            parameters -> execute(sql, parameters));
+      }
+    }
+    final QueryPlanner planner = planner();
+    final SqlNode validated = validate(planner, node);
+    if (lowered == null) {
+      parameterType = planner.parameterRowType(validated);
+    }
+    return new Prepared(sql,
+        validated.isA(SqlKind.DML) ? null : planner.rowType(validated),
+        parameterType, parameters -> execute(sql, parameters));
   }
 
   /** Executes statements separated by semicolons, handing each result to
@@ -261,7 +300,7 @@ public final class Engine implements Lowering.Context {
       throw new MonoqlException(e.getMessage(), e);
     }
     for (SqlNode node : nodes) {
-      try (Result result = execute(node)) {
+      try (Result result = execute(node, new Object[0])) {
         sink.accept(result);
       }
     }
@@ -279,18 +318,22 @@ public final class Engine implements Lowering.Context {
     cancel.set(true);
   }
 
-  private Result execute(SqlNode node) {
+  private Result execute(SqlNode node, Object[] parameters) {
     cancel = new AtomicBoolean();
     if (node instanceof SqlExplain explain) {
       return explainResult(explain.getExplicandum());
     }
     final Lowered lowered = lowering.lower(node);
     if (lowered == null) {
-      return run(node, null);
+      return run(node, null, parameters);
+    }
+    if (parameters.length > 0) {
+      throw new MonoqlException("Parameters can be given to queries and to"
+          + " INSERT, UPDATE and DELETE, but not to other statements");
     }
     Result result = null;
     for (Step step : lowered.steps()) {
-      result = run(parse(step.sql()), step);
+      result = run(parse(step.sql()), step, parameters);
     }
     return result;
   }
@@ -298,11 +341,12 @@ public final class Engine implements Lowering.Context {
   /** Runs a query or DML statement.
    *
    * @param step If the statement came from lowering, how strict to be */
-  private Result run(SqlNode node, Step step) {
+  private Result run(SqlNode node, Step step, Object[] parameters) {
     final QueryPlanner planner = planner();
     final boolean upsert = node instanceof SqlInsert insert
         && insert.isUpsert();
     final SqlNode validated = validate(planner, node);
+    bound = Runtime.bind(planner.parameterRowType(validated), parameters);
     final RelRoot root = planner.rel(validated);
     authorize(planner, root);
     if (root.rel instanceof TableModify modify) {
@@ -326,7 +370,7 @@ public final class Engine implements Lowering.Context {
       // The user's own query: hand back a cursor, and read as it is read.
       final Enumerator<Object[]> cursor =
           Runtime.open(planner.optimize(root), rootSchema.plus(),
-              planner.typeFactory(), cancel, user);
+              planner.typeFactory(), cancel, user, bound);
       return Result.ofRows(root.validatedRowType, iterator(cursor),
           cursor::close);
     }
@@ -419,7 +463,7 @@ public final class Engine implements Lowering.Context {
 
   private List<Object[]> rows(QueryPlanner planner, RelRoot root) {
     return Runtime.execute(planner.optimize(root), rootSchema.plus(),
-        planner.typeFactory(), cancel, user);
+        planner.typeFactory(), cancel, user, bound);
   }
 
   /** The rows a modification applies to. For {@code INSERT}, the new rows;
@@ -550,13 +594,12 @@ public final class Engine implements Lowering.Context {
         SqlExplainLevel.EXPPLAN_ATTRIBUTES);
   }
 
+  private static RelDataType planType(RelDataTypeFactory typeFactory) {
+    return typeFactory.builder().add("PLAN", SqlTypeName.VARCHAR).build();
+  }
+
   private Result explainResult(SqlNode node) {
-    final RelDataTypeFactory typeFactory = planner().typeFactory();
-    final RelDataType rowType =
-        typeFactory.builder()
-            .add("PLAN", SqlTypeName.VARCHAR)
-            .build();
-    return Result.ofRows(rowType,
+    return Result.ofRows(planType(planner().typeFactory()),
         List.<Object[]>of(new Object[] {plan(node)}).iterator(), null);
   }
 }

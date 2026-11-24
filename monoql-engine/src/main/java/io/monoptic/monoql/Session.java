@@ -74,9 +74,19 @@ public final class Session implements AutoCloseable {
   }
 
   /** Executes one statement. The rows of a query are read as the result
-   * is; close the result unless you read them all. */
-  public Result execute(String sql) {
-    return engine.execute(sql);
+   * is; close the result unless you read them all.
+   *
+   * @param parameters One value for each {@code ?} in the statement, which
+   *     must then be a query or {@code INSERT}, {@code UPDATE} or
+   *     {@code DELETE}; see {@link Prepared#execute} */
+  public Result execute(String sql, Object... parameters) {
+    return engine.execute(sql, parameters);
+  }
+
+  /** Checks a statement without running it, and returns what it will
+   * return and what parameters it takes. */
+  public Prepared prepare(String sql) {
+    return engine.prepare(sql);
   }
 
   /** Executes statements separated by semicolons, handing each result to

@@ -75,6 +75,22 @@ try (Session session = Monoql.builder().build()) {
 Rows are produced as the result is read, and can be read once.
 `session.cancel()`, from another thread, stops a statement that is running.
 
+Values are given as parameters, not spliced into the text; and a statement
+can be checked, and asked what it returns and takes, without running it:
+
+```java
+session.execute("insert into t values (?, ?)", 2, "b");
+
+Prepared query = session.prepare("select name from t where id = ?");
+query.columnNames();      // [NAME]
+query.parameterType();    // one field, INTEGER
+try (Result result = query.execute(2)) { ... }
+```
+
+Queries and `INSERT`, `UPDATE` and `DELETE` take parameters, including on
+the `METADATA` schema; DDL does not. A prepared statement is validated and
+planned again each time it runs: it is not a cached plan.
+
 `Monoql.builder()` takes catalogs to mount (`.catalog(name, catalog)`), extra
 catalog types (`.provider(...)`), who to act as (`.identity(...)`: a user and
 the user's groups), and a hook to customize the Calcite `FrameworkConfig` the
