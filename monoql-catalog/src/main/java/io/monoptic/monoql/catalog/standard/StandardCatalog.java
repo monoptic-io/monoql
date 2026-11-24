@@ -128,6 +128,11 @@ public abstract class StandardCatalog implements Catalog {
             requireSchema(row.schemaName());
             requireFreeName(row.key());
           }
+
+          @Override protected void afterChange(MaterializedViewInfo before,
+              MaterializedViewInfo after) {
+            materializedViewChanged(before, after);
+          }
         };
 
     refreshes =
@@ -219,6 +224,13 @@ public abstract class StandardCatalog implements Catalog {
    * (renamed, perhaps, or given a column), or dropped; throw to undo it.
    * This is where a catalog makes the data plane follow. */
   protected void tableChanged(TableInfo before, TableInfo after) {
+  }
+
+  /** Called, inside the change, when a materialized view has been
+   * created, altered (renamed, perhaps) or dropped; throw to undo it. For
+   * a catalog that keeps the view's rows. */
+  protected void materializedViewChanged(MaterializedViewInfo before,
+      MaterializedViewInfo after) {
   }
 
   @Override public <T> T atomically(Supplier<T> work) {

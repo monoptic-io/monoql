@@ -140,8 +140,10 @@ its release tooling are not here; monoql does not use them.
 This is an early cut. Known gaps, all of them deliberate omissions rather
 than silent no-ops:
 
-- Materialized views are stored and can be paused and refreshed, but no
-  catalog stores materialized rows; they read as their definition.
+- A materialized view keeps its rows only in the in-memory catalog, where
+  `REFRESH` recomputes all of them. Elsewhere it reads as its definition.
+  Nothing runs a `SCHEDULE`, and no query is rewritten to use a
+  materialized view it does not name.
 - Grants are enforced only for a session that acts as someone, and only in
   catalogs that have a `GRANTS` table. Anyone can read metadata. There is
   no authentication, and nothing is enforced against the embedding

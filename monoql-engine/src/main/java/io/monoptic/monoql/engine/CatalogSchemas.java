@@ -4,8 +4,11 @@
  */
 package io.monoptic.monoql.engine;
 
+import io.monoptic.monoql.MonoqlException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
+import io.monoptic.monoql.catalog.Column;
+import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.catalog.FunctionInfo;
 import io.monoptic.monoql.catalog.Key;
 import io.monoptic.monoql.catalog.MaterializedViewInfo;
@@ -51,6 +54,20 @@ final class CatalogSchemas {
     } catch (UnsupportedException e) {
       return Optional.empty();
     }
+  }
+
+  /** Returns what holds the rows of a materialized view, if its catalog
+   * keeps them. If not, or if its definition is no longer valid, the view
+   * reads as its definition (and in the second case, fails as it would). */
+  static Optional<Table> stored(Catalog catalog, MaterializedViewInfo view,
+      ViewTable definition) {
+    final List<Column> columns;
+    try {
+      columns = DataTypes.columns(definition.rowType());
+    } catch (MonoqlException | CatalogException e) {
+      return Optional.empty();
+    }
+    return catalog.bind(view, columns);
   }
 
   /** Adds the names (key part {@code part}) of rows in a schema. */
@@ -164,10 +181,11 @@ final class CatalogSchemas {
       final Optional<MaterializedViewInfo> mv =
           get(catalog.materializedViews(), key);
       if (mv.isPresent()) {
-        // No catalog stores materialized rows yet, so a materialized view
-        // reads as its definition: always correct, never stale.
-        return new ViewTable(mv.get().definition(), mv.get().columnNames(),
-            schemaPath, viewPath, typeDeriver);
+        final ViewTable definition =
+            new ViewTable(mv.get().definition(), mv.get().columnNames(),
+                schemaPath, viewPath, typeDeriver);
+        return stored(catalog, mv.get(), definition)
+            .orElse(definition);
       }
       return null;
     }

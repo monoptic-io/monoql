@@ -14,7 +14,7 @@ import org.apache.calcite.schema.impl.AbstractTable;
 import java.util.List;
 import java.util.function.BiFunction;
 
-/** A view (or a materialized view that has no storage of its own): expands
+/** A view (or a materialized view whose catalog does not keep its rows): expands
  * to its definition when referenced. */
 final class ViewTable extends AbstractTable implements TranslatableTable {
   private final String sql;
@@ -48,6 +48,11 @@ final class ViewTable extends AbstractTable implements TranslatableTable {
     this.schemaPath = schemaPath;
     this.viewPath = viewPath;
     this.typeDeriver = typeDeriver;
+  }
+
+  /** The query, with the view's column names applied. */
+  String sql() {
+    return sql;
   }
 
   /** Derives the row type by validating the definition; fails if it is

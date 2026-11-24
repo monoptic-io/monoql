@@ -12,6 +12,9 @@ import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.Catalog;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.CatalogProvider;
+import io.monoptic.monoql.catalog.Key;
+import io.monoptic.monoql.catalog.MaterializedViewInfo;
+import io.monoptic.monoql.catalog.MetaTables;
 import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.UnsupportedException;
 import io.monoptic.monoql.catalog.WritableTable;
@@ -27,6 +30,7 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.runtime.CalciteContextException;
 import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.SqlExplain;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.calcite.sql.SqlInsert;
@@ -44,6 +48,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -375,6 +380,11 @@ public final class Engine implements Lowering.Context {
           modify.getTable().unwrap(WritableTable.class);
       if (table != null) {
         count = modifyMetadata(planner, modify, table.relation, upsert, step);
+      } else if (isMaterializedView(modify.getTable().getQualifiedName())) {
+        throw new UnsupportedException(
+            String.join(".", modify.getTable().getQualifiedName())
+                + " is a materialized view; its rows change when it is"
+                + " refreshed");
       } else if (writable != null) {
         count = modifyData(planner, modify, writable);
       } else {
@@ -534,6 +544,53 @@ public final class Engine implements Lowering.Context {
     return rows.size();
   }
 
+  /** Runs the definition of a materialized view, and replaces its rows
+   * with the result. Does nothing if its catalog does not keep its rows,
+   * or keeps them somewhere the engine cannot write.
+   *
+   * <p>The definition is not checked against the grants of the session:
+   * like a view, a materialized view reads with the rights of whoever
+   * defined it, and refreshing one takes ownership of it. */
+  private void refresh(String catalogName, String schemaName,
+      String viewName) {
+    final Catalog catalog = registry.catalog(catalogName);
+    final Optional<MaterializedViewInfo> view =
+        catalog.materializedViews().get(Key.of(schemaName, viewName));
+    if (view.isEmpty()) {
+      return;
+    }
+    final List<String> schemaPath = List.of(catalogName, schemaName);
+    final ViewTable definition =
+        new ViewTable(view.get().definition(), view.get().columnNames(),
+            schemaPath, List.of(catalogName, schemaName, viewName),
+            this::viewType);
+    final Optional<Table> stored =
+        CatalogSchemas.stored(catalog, view.get(), definition);
+    if (stored.isEmpty() || !(stored.get() instanceof WritableTable)) {
+      return;
+    }
+    final QueryPlanner planner =
+        new QueryPlanner(config, rootSchema, List.of(schemaPath));
+    final RelRoot root =
+        planner.rel(validate(planner, parse(definition.sql())));
+    ((WritableTable) stored.get()).replace(rows(planner, root));
+  }
+
+  /** Whether a name is that of a materialized view. */
+  private boolean isMaterializedView(List<String> name) {
+    if (name.size() != 3) {
+      return false;
+    }
+    final Catalog catalog = registry.catalog(name.get(0));
+    try {
+      return catalog != null
+          && catalog.materializedViews()
+              .get(Key.of(name.get(1), name.get(2))).isPresent();
+    } catch (UnsupportedException e) {
+      return false;
+    }
+  }
+
   /** Applies DML to a metadata table: computes the affected rows with the
    * ordinary query machinery, then hands them to the catalog. */
   private long modifyMetadata(QueryPlanner planner, TableModify modify,
@@ -550,6 +607,14 @@ public final class Engine implements Lowering.Context {
             relation.insert(authorizer, row);
           }
           ++count;
+          if (relation.name().equals(MetaTables.MATERIALIZED_VIEWS.name())
+              || relation.name().equals(MetaTables.REFRESHES.name())) {
+            // A new materialized view is filled, and a request to refresh
+            // one is granted, if its rows are the engine's to write.
+            refresh(relation.catalogName(row),
+                relation.value(row, "SCHEMA_NAME"),
+                relation.value(row, "VIEW_NAME"));
+          }
         } catch (AlreadyExistsException e) {
           if (step == null || !step.ignoreConflict()) {
             throw e;

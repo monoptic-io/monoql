@@ -6,6 +6,7 @@ package io.monoptic.monoql.catalog;
 
 import org.apache.calcite.schema.Table;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -93,6 +94,26 @@ public interface Catalog extends AutoCloseable {
    * <p>By default a table is metadata only: it can be described, granted on,
    * and planned against, but a query that needs its rows fails. */
   default Optional<Table> bind(TableInfo table) {
+    return Optional.empty();
+  }
+
+  /** Returns something that holds the rows of a materialized view: what
+   * its definition returned when it was last refreshed. The catalog makes
+   * it if it is not there yet, with these columns, and reshapes it if the
+   * columns have changed.
+   *
+   * <p>If what is returned is a {@link WritableTable}, the engine fills it
+   * when the view is created, and again at each {@code REFRESH}, with
+   * {@link WritableTable#replace}. Otherwise refreshing it is the
+   * catalog's business, and a {@code REFRESH} is a row in
+   * {@link #refreshes} for it to act on.
+   *
+   * <p>By default a materialized view has no rows of its own, and reads
+   * as its definition: never stale, and never faster than the query.
+   *
+   * @param columns What the view's definition returns today */
+  default Optional<Table> bind(MaterializedViewInfo view,
+      List<Column> columns) {
     return Optional.empty();
   }
 
