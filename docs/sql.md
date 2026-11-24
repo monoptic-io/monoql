@@ -140,9 +140,10 @@ REFRESH MATERIALIZED VIEW name
 | `CREATE VIEW` | `INSERT INTO METADATA.VIEWS` |
 | `DROP VIEW` | `DELETE FROM METADATA.VIEWS` |
 | `CREATE MATERIALIZED VIEW` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO` the view, of its query |
+| `CREATE MATERIALIZED VIEW ... SCHEDULE` | the same, then `INSERT INTO METADATA.TRIGGERS` |
 | `CREATE MATERIALIZED VIEW ... REFRESH CONTINUOUSLY` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO METADATA.JOBS`, of that `INSERT INTO` the view |
-| `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS`; before it, if the view is continuous, `DELETE FROM METADATA.JOBS` |
-| `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED` |
+| `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS`; before it, `DELETE FROM METADATA.TRIGGERS` if the view has a schedule, and `DELETE FROM METADATA.JOBS` if it is continuous |
+| `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED`; and `UPDATE METADATA.TRIGGERS SET PAUSED` if the view has a schedule |
 | `REFRESH` | `DELETE FROM` the view, then `INSERT INTO` it, of its query |
 
 The query is validated when the view is created, and stored with every name
@@ -173,8 +174,13 @@ REFRESH MATERIALIZED VIEW totals;          -- runs the query again
   `SELECT` on the view alone.
 - `CREATE ... IF NOT EXISTS` leaves a view that exists as it is, rows and
   all; `CREATE OR REPLACE` empties it and fills it again.
-- `SCHEDULE` and `PAUSE` are recorded for whatever runs schedules. monoql
-  does not: it is a library, and has no process to run them in.
+- `SCHEDULE` makes a [trigger](#triggers) of the view's name, with that
+  schedule, whose action is `REFRESH MATERIALIZED VIEW` of the view. That is
+  all a view's schedule is: it shows in `SHOW TRIGGERS`, can be fired, and
+  is paused, replaced and dropped with the view. It needs a catalog with a
+  `TRIGGERS` table, and, where there are grants, `CREATE TRIGGER` on the
+  schema. monoql runs no schedules: it is a library, and has no process to
+  run them in.
 - In a catalog that does not keep the rows, a materialized view reads as its
   query, like a view. The step that fills it when it is created is
   skipped, and `REFRESH` is an error: there is nothing to refresh.
