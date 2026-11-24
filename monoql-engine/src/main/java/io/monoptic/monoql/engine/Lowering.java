@@ -462,6 +462,7 @@ final class Lowering {
             "DEFINITION", SqlText.str(query.sql));
     if (n.materialized) {
       row.put("SCHEDULE", SqlText.str(n.schedule));
+      row.put("CONTINUOUS", SqlText.bool(n.continuous));
       row.put("PAUSED", SqlText.bool(false));
     }
     row.put("COMMENT", SqlText.str(n.comment));
@@ -474,11 +475,50 @@ final class Lowering {
     final List<Step> steps =
         new ArrayList<>(create(n, "MATERIALIZED_VIEWS", row).steps());
     if (n.getReplace()) {
-      // The view it replaces may have left rows behind.
+      // The view it replaces may have left rows behind, and a job that is
+      // still adding to them.
+      steps.addAll(stop(name));
       steps.add(empty(name));
     }
-    steps.add(fill(name, query.sql));
+    final Step fill = fill(name, query.sql);
+    if (n.continuous) {
+      // The rows are not put there now, once, but by a job, for good:
+      // the same INSERT, which whatever runs the job never finishes.
+      steps.add(
+          new Step(
+              insert(false, "JOBS",
+                  List.of(
+                      row(CATALOG_NAME, SqlText.str(name.catalog),
+                          "SCHEMA_NAME", SqlText.str(name.schema),
+                          "JOB_NAME", SqlText.str(name.name),
+                          "SUBMITTED_AT", "CURRENT_TIMESTAMP",
+                          "STATEMENT", SqlText.str(fill.sql())))),
+              false, null));
+    } else {
+      steps.add(fill);
+    }
     return new Lowered(steps);
+  }
+
+  /** The steps that cancel the job that keeps a materialized view up to
+   * date, if it is such a view: the jobs of its name that insert into
+   * it. */
+  private List<Step> stop(Name name) {
+    if (!find(name, Catalog::materializedViews)
+        .map(MaterializedViewInfo::continuous).orElse(false)) {
+      return List.of();
+    }
+    final String prefix =
+        "INSERT INTO " + SqlText.path(name.catalog, name.schema, name.name);
+    return List.of(
+        new Step(
+            delete("JOBS",
+                SqlText.eq(CATALOG_NAME, name.catalog) + " AND "
+                    + SqlText.eq("SCHEMA_NAME", name.schema) + " AND "
+                    + SqlText.eq("JOB_NAME", name.name) + "\n  AND SUBSTRING("
+                    + SqlText.id("STATEMENT") + ", 1, " + prefix.length()
+                    + ") = " + SqlText.str(prefix)),
+            false, null));
   }
 
   /** The step that removes the rows of a materialized view. */
@@ -552,11 +592,19 @@ final class Lowering {
     if (name.name != null) {
       doomed.put(home.nameColumn, name.name);
     }
-    return targeted(name.catalog, home.table,
-        delete(home.table, where(n.kind, name)),
-        n.ifExists ? null : notFound(n.kind, name),
-        n.kind == ObjectKind.ROLE || n.kind == ObjectKind.USER
-            ? List.of(doomed) : null);
+    final Lowered drop =
+        targeted(name.catalog, home.table,
+            delete(home.table, where(n.kind, name)),
+            n.ifExists ? null : notFound(n.kind, name),
+            n.kind == ObjectKind.ROLE || n.kind == ObjectKind.USER
+                ? List.of(doomed) : null);
+    if (n.kind != ObjectKind.MATERIALIZED_VIEW) {
+      return drop;
+    }
+    // Its job goes first, while the view still says it has one.
+    final List<Step> steps = new ArrayList<>(stop(name));
+    steps.addAll(drop.steps());
+    return new Lowered(steps);
   }
 
   private Lowered commentOn(SqlCommentOn n) {
@@ -739,12 +787,17 @@ final class Lowering {
                       "OPTIONS", SqlText.map(n.options)))));
     case REFRESH:
       // Out with the old rows and in with the new.
-      final String query =
+      final MaterializedViewInfo view =
           find(name, Catalog::materializedViews)
-              .map(MaterializedViewInfo::definition)
               .orElseThrow(() ->
                   new NotFoundException(notFound(n.kind, name)));
-      return new Lowered(List.of(empty(name), fill(name, query)));
+      if (view.continuous()) {
+        throw new UnsupportedException("Materialized view " + name
+            + " is refreshed continuously, by a job; there is nothing to"
+            + " refresh by hand");
+      }
+      return new Lowered(
+          List.of(empty(name), fill(name, view.definition())));
     default:
       throw new AssertionError(n.verb);
     }

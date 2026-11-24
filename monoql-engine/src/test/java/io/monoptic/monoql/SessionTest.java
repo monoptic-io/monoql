@@ -215,6 +215,56 @@ class SessionTest {
         () -> session.execute("refresh materialized view nosuch"));
   }
 
+  /** A view that is refreshed continuously is filled by a job, which
+   * something else runs, and which goes when the view does. */
+  @Test void continuousViews() {
+    run(session, "create table t (id int)", "insert into t values (1), (2)",
+        "create materialized view live refresh continuously as"
+            + " select id from t where id > 1");
+    assertEquals(List.of("[LIVE, true]"),
+        rows(session, "select view_name, continuous"
+            + " from metadata.materialized_views"));
+    // Nothing here runs jobs, so nothing has filled it.
+    assertEquals(List.of(), rows(session, "select * from live"));
+    final List<String> jobs =
+        rows(session, "select job_name, statement from metadata.jobs");
+    assertEquals(1, jobs.size());
+    assertTrue(jobs.get(0).startsWith(
+        "[LIVE, INSERT INTO \"MEMORY\".\"MAIN\".\"LIVE\"\nSELECT"), jobs.get(0));
+    // What runs the job runs its statement, for ever. Once will do here.
+    final Object statement =
+        session.execute("select statement from metadata.jobs").iterator()
+            .next()[0];
+    run(session, (String) statement);
+    assertEquals(List.of("[2]"), rows(session, "select * from live"));
+
+    // It is not also refreshed by hand.
+    final UnsupportedException e =
+        assertThrows(UnsupportedException.class,
+            () -> session.execute("refresh materialized view live"));
+    assertTrue(e.getMessage().contains("continuously"), e.getMessage());
+
+    // A job of the same name that feeds something else is left alone.
+    run(session, "insert into metadata.jobs (schema_name, job_name,"
+        + " submitted_at, statement) values ('MAIN', 'LIVE',"
+        + " current_timestamp, 'select 1')");
+    // Replaced by a view that is not continuous: the job goes, and the
+    // view is filled here and now.
+    run(session, "create or replace materialized view live as"
+        + " select id from t");
+    assertEquals(List.of("[select 1]"),
+        rows(session, "select statement from metadata.jobs"));
+    assertEquals(2, rows(session, "select * from live").size());
+
+    run(session, "create or replace materialized view live refresh"
+        + " continuously as select id from t");
+    assertEquals(List.of(), rows(session, "select * from live"));
+    assertEquals(2, rows(session, "select * from metadata.jobs").size());
+    run(session, "drop materialized view live");
+    assertEquals(List.of("[select 1]"),
+        rows(session, "select statement from metadata.jobs"));
+  }
+
   /** While a view is refreshed, others read the rows it had: never none,
    * and never some. */
   @Test void refreshIsAtomic() {

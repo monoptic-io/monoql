@@ -17,10 +17,11 @@ import java.util.List;
 import java.util.Map;
 
 /** {@code CREATE [OR REPLACE] [MATERIALIZED] VIEW [IF NOT EXISTS] name
- * [(c, ...)] [SCHEDULE 'cron'] [COMMENT 'c'] [WITH (...)] AS query}.
+ * [(c, ...)] [SCHEDULE 'cron' | REFRESH CONTINUOUSLY] [COMMENT 'c'] [WITH (...)] AS query}.
  *
- * <p>{@code SCHEDULE} and {@code WITH} apply only to materialized views; the
- * parser does not accept them on a plain view. */
+ * <p>{@code SCHEDULE}, {@code REFRESH CONTINUOUSLY} and {@code WITH} apply
+ * only to materialized views; the parser does not accept them on a plain
+ * view. */
 public class SqlCreateView extends SqlCreate {
   private static final SqlOperator OPERATOR =
       SqlClauses.operator("CREATE VIEW", SqlKind.CREATE_VIEW);
@@ -29,19 +30,21 @@ public class SqlCreateView extends SqlCreate {
   public final SqlIdentifier name;
   public final SqlNodeList columnList;
   public final String schedule;
+  public final boolean continuous;
   public final String comment;
   public final Map<String, String> options;
   public final SqlNode query;
 
   public SqlCreateView(SqlParserPos pos, boolean replace, boolean ifNotExists,
       boolean materialized, SqlIdentifier name, SqlNodeList columnList,
-      String schedule, String comment, Map<String, String> options,
-      SqlNode query) {
+      String schedule, boolean continuous, String comment,
+      Map<String, String> options, SqlNode query) {
     super(OPERATOR, pos, replace, ifNotExists);
     this.materialized = materialized;
     this.name = name;
     this.columnList = columnList;
     this.schedule = schedule;
+    this.continuous = continuous;
     this.comment = comment;
     this.options = options;
     this.query = query;
@@ -65,6 +68,9 @@ public class SqlCreateView extends SqlCreate {
     if (schedule != null) {
       writer.keyword("SCHEDULE");
       SqlClauses.string(writer, schedule);
+    }
+    if (continuous) {
+      writer.keyword("REFRESH CONTINUOUSLY");
     }
     SqlClauses.comment(writer, comment);
     SqlClauses.options(writer, options);

@@ -126,6 +126,11 @@ class LoweringTest {
             "create materialized view x.mv schedule '@daily' with (e = 'f') "
                 + "as select count(*) as c from t",
             "pause materialized view x.mv",
+            "create materialized view x.live refresh continuously "
+                + "as select a from t",
+            "create materialized view x.gone refresh continuously "
+                + "as select b from t",
+            "drop materialized view x.gone",
             "create function x.f language python comment 'fc' as 'pass'",
             "create trigger x.tr after insert or delete on x.u "
                 + "schedule '@hourly' with (g = 'h') as 'go'",

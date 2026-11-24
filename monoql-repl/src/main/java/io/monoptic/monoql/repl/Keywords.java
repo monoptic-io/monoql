@@ -26,8 +26,8 @@ final class Keywords {
           "DATABASES", "TABLES", "VIEW", "VIEWS", "MATERIALIZED", "ROLE",
           "ROLES", "USERS", "GRANTS", "COLUMNS", "PARTITIONS", "FUNCTIONS",
           "TRIGGERS", "SETTINGS", "PAUSE", "RESUME", "FIRE", "REFRESH", "USE",
-          "IF", "COMMENT", "SCHEDULE", "PARTITIONED", "OPTIONS",
-          "TBLPROPERTIES", "PRIVILEGES", "USAGE", "OPTION", "RENAME",
+          "IF", "COMMENT", "SCHEDULE", "CONTINUOUSLY", "PARTITIONED",
+          "OPTIONS", "TBLPROPERTIES", "PRIVILEGES", "USAGE", "OPTION", "RENAME",
           "BEFORE", "AFTER", "REPLACE", "KEY", "ADD", "UPSERT");
 
   /** Words offered by completion: the reserved words, plus the statement
