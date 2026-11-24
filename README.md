@@ -141,7 +141,8 @@ This is an early cut. Known gaps, all of them deliberate omissions rather
 than silent no-ops:
 
 - A materialized view keeps its rows only in the in-memory catalog, where
-  `REFRESH` recomputes all of them. Elsewhere it reads as its definition.
+  `REFRESH` deletes them and inserts its query's. Elsewhere it reads as its
+  definition.
   Nothing runs a `SCHEDULE`, and no query is rewritten to use a
   materialized view it does not name.
 - Grants are enforced only for a session that acts as someone, and only in

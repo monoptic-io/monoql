@@ -133,7 +133,7 @@ final class Relation<R extends MetaRow> {
 
   /** Returns the catalog a row of a catalog relation belongs to: the one
    * it names, or the current one. */
-  String catalogName(Object[] row) {
+  private String catalogName(Object[] row) {
     String catalogName = codec.catalogOf(row);
     if (catalogName == null) {
       catalogName = currentCatalog.get();
@@ -145,7 +145,7 @@ final class Relation<R extends MetaRow> {
     return catalogName;
   }
 
-  String value(Object[] row, String column) {
+  private String value(Object[] row, String column) {
     final Object o = row[codec.ordinal(column)];
     return o == null ? null : o.toString();
   }

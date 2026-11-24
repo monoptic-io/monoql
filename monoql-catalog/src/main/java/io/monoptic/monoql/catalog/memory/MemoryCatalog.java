@@ -17,14 +17,36 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /** A catalog that lives on the heap and supports everything: the rules of
  * {@link StandardCatalog}, with metadata and rows held in memory. */
 public class MemoryCatalog extends StandardCatalog {
   private final Map<Key, MemoryDataTable> data = new ConcurrentHashMap<>();
 
+  private final ThreadLocal<MemoryDataTable.Unit> units = new ThreadLocal<>();
+
   public MemoryCatalog() {
     super(new HeapStorage());
+  }
+
+  /** What the work writes to the rows of tables is seen by nobody else
+   * until it returns, and is forgotten if it throws. Changes to metadata
+   * are not undone. */
+  @Override public <T> T atomically(Supplier<T> work) {
+    if (units.get() != null) {
+      return super.atomically(work);
+    }
+    final MemoryDataTable.Unit unit = new MemoryDataTable.Unit();
+    units.set(unit);
+    final T result;
+    try {
+      result = super.atomically(work);
+    } finally {
+      units.remove();
+    }
+    unit.publish();
+    return result;
   }
 
   /** Existing rows survive a change of shape, and follow a rename. */
@@ -55,7 +77,7 @@ public class MemoryCatalog extends StandardCatalog {
   @Override public Optional<Table> bind(MaterializedViewInfo view,
       List<Column> columns) {
     final MemoryDataTable store =
-        data.computeIfAbsent(view.key(), k -> new MemoryDataTable(columns));
+        data.computeIfAbsent(view.key(), k -> new MemoryDataTable(columns, units));
     store.alter(columns);
     return Optional.of(store);
   }
@@ -63,6 +85,6 @@ public class MemoryCatalog extends StandardCatalog {
   @Override public Optional<Table> bind(TableInfo table) {
     return Optional.of(
         data.computeIfAbsent(table.key(),
-            k -> new MemoryDataTable(table.columns())));
+            k -> new MemoryDataTable(table.columns(), units)));
   }
 }

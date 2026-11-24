@@ -184,9 +184,8 @@ class AuthorizationTest {
     assertEquals(List.of("[10]"), rows(bob, "select * from mine.peek"));
   }
 
-  /** A materialized view is read like a view, with a grant on it alone;
-   * and refreshed by whoever owns it, with the rights it was defined
-   * with. */
+  /** A materialized view is read with a grant on it alone, and refreshed
+   * by whoever owns it and can read what it reads. */
   @Test void materializedViews() {
     run(root, "create schema mine", "grant all on schema mine to bob");
     denied(bob, "create materialized view mine.m as select id from s.u");
@@ -197,21 +196,22 @@ class AuthorizationTest {
     denied(ann, "select * from u");
 
     run(root, "insert into u values (11)");
-    assertEquals("User ANN lacks OWNERSHIP on C.MINE.M, which changing"
-            + " METADATA.REFRESHES takes",
+    assertEquals("User ANN lacks OWNERSHIP on C.MINE.M, which writing the"
+            + " rows of a materialized view takes",
         denied(ann, "refresh materialized view mine.m"));
     denied(ann, "insert into mine.m values (0)");
+    denied(ann, "delete from mine.m");
     assertEquals(List.of("[10]"), rows(ann, "select * from mine.m"));
     run(bob, "refresh materialized view mine.m");
     assertEquals(List.of("[10]", "[11]"),
         rows(ann, "select * from mine.m order by id"));
 
-    // As with a view, what the definition reads was checked when it was
-    // defined, and not again.
+    // Refreshing reads what the definition reads, as whoever refreshes;
+    // reading the rows that are kept does not.
     run(root, "revoke select on u from bob", "insert into u values (12)");
-    denied(bob, "select * from u");
-    run(bob, "refresh materialized view mine.m");
-    assertEquals(3, rows(ann, "select * from mine.m").size());
+    assertEquals("User BOB lacks SELECT on C.S.U",
+        denied(bob, "refresh materialized view mine.m"));
+    assertEquals(2, rows(ann, "select * from mine.m").size());
   }
 
   /** Creating takes a privilege on the schema; everything after that

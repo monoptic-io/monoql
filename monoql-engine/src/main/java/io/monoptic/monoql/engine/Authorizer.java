@@ -223,6 +223,20 @@ final class Authorizer {
     }
   }
 
+  /** Checks that the user may write the rows of a materialized view, which
+   * takes owning it: they are its query's rows, and not for others to
+   * edit. */
+  void checkRows(String catalog, String schema, String name) {
+    final List<Grant> grants = grants(catalog);
+    if (grants != null
+        && !holds(grants, OWNERSHIP, false, "MATERIALIZED VIEW", schema,
+            name)) {
+      throw new AccessDeniedException("User " + user + " lacks " + OWNERSHIP
+          + " on " + path(catalog, schema, name) + ", which writing the rows"
+          + " of a materialized view takes");
+    }
+  }
+
   /** Checks that the user may write a row of a metadata table.
    *
    * @param table Name of the metadata table

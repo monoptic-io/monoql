@@ -7,7 +7,19 @@ package io.monoptic.monoql;
 import io.monoptic.monoql.catalog.AlreadyExistsException;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.NotFoundException;
+import io.monoptic.monoql.catalog.TableInfo;
 import io.monoptic.monoql.catalog.UnsupportedException;
+import io.monoptic.monoql.catalog.memory.MemoryCatalog;
+
+import org.apache.calcite.DataContext;
+import org.apache.calcite.linq4j.Enumerable;
+import org.apache.calcite.linq4j.Linq4j;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.schema.ScannableTable;
+import org.apache.calcite.schema.Table;
+import org.apache.calcite.schema.impl.AbstractTable;
+import org.apache.calcite.sql.type.SqlTypeName;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +29,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import static io.monoptic.monoql.Sessions.rows;
 import static io.monoptic.monoql.Sessions.run;
@@ -203,6 +217,61 @@ class SessionTest {
         () -> session.execute("refresh materialized view nosuch"));
   }
 
+  /** While a view is refreshed, others read the rows it had: never none,
+   * and never some. */
+  @Test void refreshIsAtomic() {
+    final List<Integer> seen = new ArrayList<>();
+    final Session[] reader = new Session[1];
+    // A table that, whenever it is scanned, has someone else count MV.
+    final MemoryCatalog catalog = new MemoryCatalog() {
+      @Override public Optional<Table> bind(TableInfo table) {
+        if (!table.tableName().equals("PROBE")) {
+          return super.bind(table);
+        }
+        return Optional.of(new Probe(() ->
+            seen.add(
+                CompletableFuture.supplyAsync(() ->
+                    rows(reader[0], "select * from c.s.mv").size()).join())));
+      }
+    };
+    try (Session writer = Monoql.builder().catalog("C", catalog).build()) {
+      reader[0] = writer.as(null);
+      run(writer, "create schema s", "use c.s", "create table probe (x int)",
+          "create table t (id int)", "insert into t values (1), (2), (3)",
+          "create materialized view mv as select id from t");
+      run(writer, "insert into t values (4)",
+          "refresh materialized view mv");
+      assertEquals(List.of("[1]", "[2]", "[3]", "[4]"),
+          rows(writer, "select * from mv order by id"));
+      seen.clear();
+      // The refresh has emptied MV, as far as it can tell, when it scans
+      // PROBE; the reader still counts four.
+      run(writer, "create or replace materialized view mv as"
+          + " select id from t union all select x from probe");
+      run(writer, "refresh materialized view mv");
+      assertEquals(List.of(4, 4), seen);
+    }
+  }
+
+  /** An empty table that runs something when it is scanned. */
+  private static final class Probe extends AbstractTable
+      implements ScannableTable {
+    private final Runnable onScan;
+
+    Probe(Runnable onScan) {
+      this.onScan = onScan;
+    }
+
+    @Override public RelDataType getRowType(RelDataTypeFactory typeFactory) {
+      return typeFactory.builder().add("X", SqlTypeName.INTEGER).build();
+    }
+
+    @Override public Enumerable<Object[]> scan(DataContext root) {
+      onScan.run();
+      return Linq4j.emptyEnumerable();
+    }
+  }
+
   /** The memory catalog keeps the rows of a materialized view: they are
    * what the definition returned at the last refresh. */
   @Test void materializedRows() {
@@ -219,20 +288,29 @@ class SessionTest {
     run(session, "refresh materialized view mv");
     assertEquals(List.of("[3, c]"), rows(session, "select * from mv"));
 
-    // The other spelling of REFRESH does the same.
-    run(session, "insert into t values (4, 'd')",
-        "insert into metadata.refreshes (schema_name, view_name, requested_at)"
-            + " values ('MAIN', 'MV', current_timestamp)");
+    // REFRESH is these steps, and run by hand they do the same.
+    assertEquals(
+        List.of("DELETE FROM \"MEMORY\".\"MAIN\".\"MV\"",
+            "INSERT INTO \"MEMORY\".\"MAIN\".\"MV\"",
+            "INSERT INTO \"METADATA\".\"REFRESHES\""),
+        session.lower("refresh materialized view mv").sql().stream()
+            .map(sql -> sql.lines().findFirst().orElseThrow()
+                .replaceAll(" \\(.*", ""))
+            .toList());
+    run(session, "insert into t values (4, 'd')");
+    for (String sql : session.lower("refresh materialized view mv").sql()) {
+      run(session, sql);
+    }
     assertEquals(List.of("[3, c]", "[4, d]"),
         rows(session, "select * from mv order by id"));
 
-    // Its rows are not written any other way.
-    for (String sql : List.of("insert into mv values (9, 'z')",
-        "update mv set name = 'z'", "delete from mv")) {
-      final UnsupportedException e =
-          assertThrows(UnsupportedException.class, () -> session.execute(sql));
-      assertTrue(e.getMessage().contains("materialized view"), e.getMessage());
-    }
+    // IF NOT EXISTS leaves a view that exists as it is, rows and all.
+    run(session, "insert into t values (5, 'e')",
+        "create materialized view if not exists mv as select id, name from t");
+    assertEquals(2, rows(session, "select * from mv").size());
+    run(session,
+        "create table if not exists t as select * from (values (0, 'x'))");
+    assertEquals(4, rows(session, "select * from t").size());
 
     // A refresh that fails leaves the rows as they were.
     run(session, "create table u (x int)", "insert into u values (1), (2)",

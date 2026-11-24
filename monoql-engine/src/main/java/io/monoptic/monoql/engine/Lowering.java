@@ -10,6 +10,7 @@ import io.monoptic.monoql.catalog.Column;
 import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.catalog.Grant;
 import io.monoptic.monoql.catalog.Key;
+import io.monoptic.monoql.catalog.MaterializedViewInfo;
 import io.monoptic.monoql.catalog.TableInfo;
 import io.monoptic.monoql.catalog.UnsupportedException;
 import io.monoptic.monoql.engine.Lowered.Step;
@@ -45,6 +46,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.StringJoiner;
 
 /** Rewrites DDL, DCL and control statements as DML and queries against the
@@ -330,7 +332,7 @@ final class Lowering {
   private static Lowered targeted(String catalog, String table, String sql,
       String notFound, List<Map<String, Object>> doomed) {
     return new Lowered(
-        List.of(new Step(sql, false, notFound, catalog, table, doomed)));
+        List.of(new Step(sql, false, notFound, catalog, table, doomed, false)));
   }
 
   private static Map<String, Object> values(Object... columnsAndValues) {
@@ -461,7 +463,29 @@ final class Lowering {
     if (n.materialized) {
       row.put("OPTIONS", SqlText.map(n.options));
     }
-    return create(n, n.materialized ? "MATERIALIZED_VIEWS" : "VIEWS", row);
+    if (!n.materialized) {
+      return create(n, "VIEWS", row);
+    }
+    final List<Step> steps =
+        new ArrayList<>(create(n, "MATERIALIZED_VIEWS", row).steps());
+    if (n.getReplace()) {
+      // The view it replaces may have left rows behind.
+      steps.add(empty(name));
+    }
+    steps.add(fill(name, query.sql));
+    return new Lowered(steps);
+  }
+
+  /** The step that removes the rows of a materialized view. */
+  private static Step empty(Name name) {
+    return Step.fill("DELETE FROM "
+        + SqlText.path(name.catalog, name.schema, name.name));
+  }
+
+  /** The step that gives a materialized view the rows of its query. */
+  private static Step fill(Name name, String query) {
+    return Step.fill("INSERT INTO "
+        + SqlText.path(name.catalog, name.schema, name.name) + "\n" + query);
   }
 
   private Lowered createFunction(SqlCreateFunction n) {
@@ -702,15 +726,40 @@ final class Lowering {
                       "FIRED_AT", "CURRENT_TIMESTAMP",
                       "OPTIONS", SqlText.map(n.options)))));
     case REFRESH:
-      return Lowered.of(
-          insert(false, "REFRESHES",
-              List.of(
-                  row(CATALOG_NAME, SqlText.str(name.catalog),
-                      "SCHEMA_NAME", SqlText.str(name.schema),
-                      "VIEW_NAME", SqlText.str(name.name),
-                      "REQUESTED_AT", "CURRENT_TIMESTAMP"))));
+      // Out with the old rows and in with the new, and a note that it was
+      // asked for. If there is no such view, the note is what fails.
+      final List<Step> steps = new ArrayList<>();
+      definition(name).ifPresent(query -> {
+        steps.add(empty(name));
+        steps.add(fill(name, query));
+      });
+      steps.add(
+          new Step(
+              insert(false, "REFRESHES",
+                  List.of(
+                      row(CATALOG_NAME, SqlText.str(name.catalog),
+                          "SCHEMA_NAME", SqlText.str(name.schema),
+                          "VIEW_NAME", SqlText.str(name.name),
+                          "REQUESTED_AT", "CURRENT_TIMESTAMP"))),
+              false, null));
+      return new Lowered(steps);
     default:
       throw new AssertionError(n.verb);
+    }
+  }
+
+  /** The query of a materialized view, if there is such a view. */
+  private Optional<String> definition(Name name) {
+    final Catalog catalog = context.catalog(name.catalog);
+    if (catalog == null) {
+      return Optional.empty();
+    }
+    try {
+      return catalog.materializedViews()
+          .get(Key.of(name.schema, name.name))
+          .map(MaterializedViewInfo::definition);
+    } catch (UnsupportedException e) {
+      return Optional.empty();
     }
   }
 

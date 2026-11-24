@@ -138,10 +138,10 @@ REFRESH MATERIALIZED VIEW name
 |---|---|
 | `CREATE VIEW` | `INSERT INTO METADATA.VIEWS` |
 | `DROP VIEW` | `DELETE FROM METADATA.VIEWS` |
-| `CREATE MATERIALIZED VIEW` | `INSERT INTO METADATA.MATERIALIZED_VIEWS` |
+| `CREATE MATERIALIZED VIEW` | `INSERT INTO METADATA.MATERIALIZED_VIEWS`, then `INSERT INTO` the view, of its query |
 | `DROP MATERIALIZED VIEW` | `DELETE FROM METADATA.MATERIALIZED_VIEWS` |
 | `PAUSE`, `RESUME` | `UPDATE METADATA.MATERIALIZED_VIEWS SET PAUSED` |
-| `REFRESH` | `INSERT INTO METADATA.REFRESHES` |
+| `REFRESH` | `DELETE FROM` the view, `INSERT INTO` it, of its query, then `INSERT INTO METADATA.REFRESHES` |
 
 The query is validated when the view is created, and stored with every name
 fully qualified, so a view means the same thing whatever the current schema
@@ -160,17 +160,22 @@ REFRESH MATERIALIZED VIEW totals;          -- runs the query again
 
 - The query may read any catalog, so a materialized view is also a way to
   copy rows from one catalog to another.
-- `REFRESH` replaces all the rows in one change: a reader sees the old rows
-  or the new, and if the query fails, the old rows stay. There is no
-  incremental refresh.
-- A row in `REFRESHES` is a request to refresh, and the engine grants it as
-  it is inserted, whichever way it is spelled.
-- The rows change in no other way: `INSERT`, `UPDATE` and `DELETE` on a
-  materialized view are rejected.
+- `REFRESH` is a `DELETE` of the rows and an `INSERT` of the query's, as
+  `!lower` shows; there is no incremental refresh. They are one statement,
+  so in a catalog that makes statements atomic, as the in-memory catalog
+  does for rows, a reader sees the old rows or the new, and if the query
+  fails the old rows stay. Run by hand, they are two statements.
+- The rows of a materialized view are its owner's to write, with ordinary
+  DML; that is all a refresh is. Refreshing therefore takes ownership of the
+  view, and `SELECT` on what its query reads. Reading the view takes
+  `SELECT` on the view alone.
+- `CREATE ... IF NOT EXISTS` leaves a view that exists as it is, rows and
+  all; `CREATE OR REPLACE` empties it and fills it again.
 - `SCHEDULE` and `PAUSE` are recorded for whatever runs schedules. monoql
   does not: it is a library, and has no process to run them in.
 - In a catalog that does not keep the rows, a materialized view reads as its
-  query, like a view, and `REFRESH` only records the request.
+  query, like a view. The steps that write its rows are skipped, and
+  `REFRESH` only records the request.
 - A query is never rewritten to read a materialized view it does not name.
 
 ## Functions
@@ -282,6 +287,7 @@ the catalogs. The identity is shown by `SHOW SETTINGS` (`user`, `groups`) and
 | Create a table, view, materialized view, function or trigger | `CREATE TABLE`, `CREATE VIEW`, `CREATE MATERIALIZED VIEW`, `CREATE FUNCTION` or `CREATE TRIGGER` on the schema |
 | Create a schema | `CREATE SCHEMA` on the catalog |
 | Alter, comment on, pause, resume, fire, refresh, replace or drop something | `OWNERSHIP` of it |
+| Write the rows of a materialized view, which refreshing does | `OWNERSHIP` of it, and `SELECT` on what the rows are read from |
 | `GRANT` or `REVOKE` a privilege on something | `OWNERSHIP` of it; or that privilege on it `WITH GRANT OPTION` |
 | Anything about roles and users | `OWNERSHIP` of the catalog |
 | `CREATE CATALOG`, `DROP CATALOG` | a session with no user |

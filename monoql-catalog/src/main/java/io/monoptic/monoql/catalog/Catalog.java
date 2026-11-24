@@ -102,11 +102,12 @@ public interface Catalog extends AutoCloseable {
    * it if it is not there yet, with these columns, and reshapes it if the
    * columns have changed.
    *
-   * <p>If what is returned is a {@link WritableTable}, the engine fills it
-   * when the view is created, and again at each {@code REFRESH}, with
-   * {@link WritableTable#replace}. Otherwise refreshing it is the
-   * catalog's business, and a {@code REFRESH} is a row in
-   * {@link #refreshes} for it to act on.
+   * <p>The engine fills it with ordinary DML, as it would write a table
+   * from {@link #bind(TableInfo)}: an {@code INSERT} of the definition when
+   * the view is created, and a {@code DELETE} and that {@code INSERT} at
+   * each {@code REFRESH}. They are one statement, so a reader sees the old
+   * rows or the new if the catalog makes statements atomic; see
+   * {@link #atomically}.
    *
    * <p>By default a materialized view has no rows of its own, and reads
    * as its definition: never stale, and never faster than the query.
