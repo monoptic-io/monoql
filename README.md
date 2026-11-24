@@ -119,6 +119,7 @@ packages and, as far as possible, its text.
 | `monoql-catalog` | The catalog API and SPI (`io.monoptic.monoql.catalog`), and an in-memory catalog that implements all of it. |
 | `monoql-engine` | The parser extensions, the `METADATA` schema, the lowering of statements to DML, and `Session`. |
 | `monoql-jdbc` | A catalog over any JDBC database. An ordinary SPI implementation, in its own jar. |
+| `monoql-metastore` | A catalog whose metadata is kept in a SQL database, for many tenants, with its tables' rows in a catalog of another type. Likewise. |
 | `monoql-repl` | The shell. |
 | `core`, `linq4j` | Calcite's parser, validator, planner and runtime, with the JDBC driver removed. |
 | `legacy-jdbc`, `testkit` | The removed driver, and Calcite's test harness, which uses it. Test-only. |

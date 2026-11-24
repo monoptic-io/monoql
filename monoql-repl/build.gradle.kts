@@ -17,6 +17,7 @@ dependencies {
     // So that CREATE CATALOG ... WITH (type = 'jdbc') works out of the box.
     // The database's own driver comes from --jar.
     runtimeOnly(project(":monoql-jdbc"))
+    runtimeOnly(project(":monoql-metastore"))
     runtimeOnly("org.apache.logging.log4j:log4j-slf4j-impl")
 
 }

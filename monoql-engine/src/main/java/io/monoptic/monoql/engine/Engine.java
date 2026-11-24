@@ -323,19 +323,27 @@ public final class Engine implements Lowering.Context {
     if (node instanceof SqlExplain explain) {
       return explainResult(explain.getExplicandum());
     }
-    final Lowered lowered = lowering.lower(node);
-    if (lowered == null) {
+    if (node.isA(SqlKind.QUERY)) {
+      // Nothing to undo; and its rows are read after this returns.
       return run(node, null, parameters);
     }
-    if (parameters.length > 0) {
-      throw new MonoqlException("Parameters can be given to queries and to"
-          + " INSERT, UPDATE and DELETE, but not to other statements");
-    }
-    Result result = null;
-    for (Step step : lowered.steps()) {
-      result = run(parse(step.sql()), step, parameters);
-    }
-    return result;
+    // Anything else changes something, perhaps in several steps, each of
+    // them perhaps several calls on a catalog: all of it, or none.
+    return registry.atomically(() -> {
+      final Lowered lowered = lowering.lower(node);
+      if (lowered == null) {
+        return run(node, null, parameters);
+      }
+      if (parameters.length > 0) {
+        throw new MonoqlException("Parameters can be given to queries and to"
+            + " INSERT, UPDATE and DELETE, but not to other statements");
+      }
+      Result result = null;
+      for (Step step : lowered.steps()) {
+        result = run(parse(step.sql()), step, parameters);
+      }
+      return result;
+    });
   }
 
   /** Runs a query or DML statement.
