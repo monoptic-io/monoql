@@ -32,6 +32,13 @@ public interface WritableTable {
     throw new UnsupportedException("This table does not support UPDATE");
   }
 
+  /** Removes every row and adds these, as one change: a reader sees the
+   * rows there were or these, and nothing in between. This is how a
+   * materialized view is refreshed. */
+  default void replace(List<Object[]> rows) {
+    throw new UnsupportedException("This table does not support REFRESH");
+  }
+
   /** Removes rows. */
   default void delete(List<Object[]> rows) {
     throw new UnsupportedException("This table does not support DELETE");

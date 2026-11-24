@@ -184,6 +184,36 @@ class AuthorizationTest {
     assertEquals(List.of("[10]"), rows(bob, "select * from mine.peek"));
   }
 
+  /** A materialized view is read like a view, with a grant on it alone;
+   * and refreshed by whoever owns it, with the rights it was defined
+   * with. */
+  @Test void materializedViews() {
+    run(root, "create schema mine", "grant all on schema mine to bob");
+    denied(bob, "create materialized view mine.m as select id from s.u");
+    run(root, "grant select on u to bob");
+    run(bob, "create materialized view mine.m as select id from s.u",
+        "grant select on mine.m to ann");
+    assertEquals(List.of("[10]"), rows(ann, "select * from mine.m"));
+    denied(ann, "select * from u");
+
+    run(root, "insert into u values (11)");
+    assertEquals("User ANN lacks OWNERSHIP on C.MINE.M, which changing"
+            + " METADATA.REFRESHES takes",
+        denied(ann, "refresh materialized view mine.m"));
+    denied(ann, "insert into mine.m values (0)");
+    assertEquals(List.of("[10]"), rows(ann, "select * from mine.m"));
+    run(bob, "refresh materialized view mine.m");
+    assertEquals(List.of("[10]", "[11]"),
+        rows(ann, "select * from mine.m order by id"));
+
+    // As with a view, what the definition reads was checked when it was
+    // defined, and not again.
+    run(root, "revoke select on u from bob", "insert into u values (12)");
+    denied(bob, "select * from u");
+    run(bob, "refresh materialized view mine.m");
+    assertEquals(3, rows(ann, "select * from mine.m").size());
+  }
+
   /** Creating takes a privilege on the schema; everything after that
    * takes ownership, which creating confers. */
   @Test void creatingAndOwning() {

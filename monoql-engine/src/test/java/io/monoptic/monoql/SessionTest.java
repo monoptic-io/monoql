@@ -203,6 +203,58 @@ class SessionTest {
         () -> session.execute("refresh materialized view nosuch"));
   }
 
+  /** The memory catalog keeps the rows of a materialized view: they are
+   * what the definition returned at the last refresh. */
+  @Test void materializedRows() {
+    run(session, "create table t (id int, name varchar)",
+        "insert into t values (1, 'a'), (2, 'b')",
+        "create materialized view mv as select id, name from t where id > 1");
+    // Filled when created.
+    assertEquals(List.of("[2, b]"), rows(session, "select * from mv"));
+    // Stale until refreshed.
+    run(session, "insert into t values (3, 'c')", "delete from t where id = 2");
+    assertEquals(List.of("[2, b]"), rows(session, "select * from mv"));
+    assertEquals(List.of("[3, c]"),
+        rows(session, "select id, name from t where id > 1"));
+    run(session, "refresh materialized view mv");
+    assertEquals(List.of("[3, c]"), rows(session, "select * from mv"));
+
+    // The other spelling of REFRESH does the same.
+    run(session, "insert into t values (4, 'd')",
+        "insert into metadata.refreshes (schema_name, view_name, requested_at)"
+            + " values ('MAIN', 'MV', current_timestamp)");
+    assertEquals(List.of("[3, c]", "[4, d]"),
+        rows(session, "select * from mv order by id"));
+
+    // Its rows are not written any other way.
+    for (String sql : List.of("insert into mv values (9, 'z')",
+        "update mv set name = 'z'", "delete from mv")) {
+      final UnsupportedException e =
+          assertThrows(UnsupportedException.class, () -> session.execute(sql));
+      assertTrue(e.getMessage().contains("materialized view"), e.getMessage());
+    }
+
+    // A refresh that fails leaves the rows as they were.
+    run(session, "create table u (x int)", "insert into u values (1), (2)",
+        "create materialized view q as select 10 / x as y from u");
+    assertEquals(List.of("[5]", "[10]"),
+        rows(session, "select * from q order by y"));
+    run(session, "insert into u values (0)");
+    assertThrows(RuntimeException.class,
+        () -> session.execute("refresh materialized view q"));
+    assertEquals(List.of("[5]", "[10]"),
+        rows(session, "select * from q order by y"));
+
+    // Its rows go when it does; and its shape is its definition's.
+    run(session, "drop materialized view q",
+        "create materialized view q (a, b) as select x, x + 1 from u");
+    assertEquals(List.of("[0, 1]", "[1, 2]", "[2, 3]"),
+        rows(session, "select a, b from q order by a"));
+    run(session, "create or replace materialized view q as"
+        + " select count(*) as c from u");
+    assertEquals(List.of("[3]"), rows(session, "select c from q"));
+  }
+
   @Test void grants() {
     run(session, "create table t (a int)", "create role analyst",
         "grant select, insert on t to role analyst, user 'bob@example.com' "

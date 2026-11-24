@@ -147,6 +147,32 @@ The query is validated when the view is created, and stored with every name
 fully qualified, so a view means the same thing whatever the current schema
 is when it is read.
 
+A materialized view has rows of its own if its catalog keeps them, as the
+in-memory catalog does. They are what the query returned when the view was
+created, or last refreshed; in between, they are as stale as that.
+
+```sql
+CREATE MATERIALIZED VIEW totals AS SELECT region, SUM(amount) AS total
+  FROM pg.public.orders GROUP BY region;   -- runs the query, keeps the rows
+SELECT * FROM totals;                      -- reads the kept rows
+REFRESH MATERIALIZED VIEW totals;          -- runs the query again
+```
+
+- The query may read any catalog, so a materialized view is also a way to
+  copy rows from one catalog to another.
+- `REFRESH` replaces all the rows in one change: a reader sees the old rows
+  or the new, and if the query fails, the old rows stay. There is no
+  incremental refresh.
+- A row in `REFRESHES` is a request to refresh, and the engine grants it as
+  it is inserted, whichever way it is spelled.
+- The rows change in no other way: `INSERT`, `UPDATE` and `DELETE` on a
+  materialized view are rejected.
+- `SCHEDULE` and `PAUSE` are recorded for whatever runs schedules. monoql
+  does not: it is a library, and has no process to run them in.
+- In a catalog that does not keep the rows, a materialized view reads as its
+  query, like a view, and `REFRESH` only records the request.
+- A query is never rewritten to read a materialized view it does not name.
+
 ## Functions
 
 ```

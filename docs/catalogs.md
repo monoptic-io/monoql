@@ -56,6 +56,7 @@ public interface Catalog extends AutoCloseable {
   default MetaTable<Grant> grants()                           // GRANT ... ON, REVOKE ... ON
   default MetaTable<RoleGrant> roleGrants()                   // GRANT ROLE, REVOKE ROLE
   default Optional<Table> bind(TableInfo table)               // the data plane
+  default Optional<Table> bind(MaterializedViewInfo view, List<Column> columns)
   default void close()
 }
 ```
@@ -193,6 +194,30 @@ default Optional<org.apache.calcite.schema.Table> bind(TableInfo table)
   the right answer for registries, and for planning pipelines that run
   elsewhere.
 
+### Materialized views
+
+A materialized view has rows too, if the catalog keeps them:
+
+```java
+default Optional<Table> bind(MaterializedViewInfo view, List<Column> columns)
+```
+
+`columns` is what the view's definition returns today. The catalog returns
+what holds the view's rows, making it if it is not there and reshaping it if
+the columns have changed.
+
+- Return a `WritableTable` and the engine keeps it filled: when the view is
+  created, and whenever a row is inserted into `REFRESHES`, it runs the
+  definition and calls `replace(rows)`, which must swap the rows in one
+  change. Nothing else writes to it; the engine rejects DML on a
+  materialized view.
+- Return some other table, and reads come from it, but filling it is the
+  catalog's business: a `REFRESH` is a row in `REFRESHES` for it to act on.
+- Return empty (the default) and the view reads as its definition.
+
+Dropping the view should drop its rows: `StandardCatalog` calls
+`materializedViewChanged(before, after)` for that.
+
 ## Atomic statements
 
 A statement is often several changes: `DROP TABLE` removes a row of `TABLES`
@@ -253,7 +278,8 @@ keeps rows on the heap. It is the reference for what each operation should
 do, including the integrity rules a good backend enforces: objects live in
 schemas that exist, tables and views share a namespace, a schema that has
 objects cannot be dropped, partitions match their table's partition keys.
-`MemoryMetaTable` is reusable on its own, to back one table of a catalog.
+`MemoryMetaTable` is reusable on its own, to back one table of a catalog. It
+keeps the rows of tables and of materialized views, on the heap.
 
 Those rules are not the memory catalog's own. They are `StandardCatalog`
 (in `io.monoptic.monoql.catalog.standard`), which keeps its rows in a
@@ -286,6 +312,8 @@ CREATE CATALOG lake WITH (type = 'metastore',
   everything else, so a data catalog needs only `SCHEMAS`, `TABLES` and
   `bind`. Without a data catalog, tables are metadata only.
 - **Statements are atomic** in the metastore: see below.
+- **Materialized views have no rows of their own** yet: they read as their
+  definitions, and a `REFRESH` is recorded and nothing more.
 - Other options: `driver`; and `create = false`, if the metastore's tables
   are made by someone else.
 

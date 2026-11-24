@@ -94,6 +94,11 @@ final class MemoryDataTable extends AbstractTable
     }
   }
 
+  @Override public synchronized void replace(List<Object[]> newRows) {
+    rows.clear();
+    insert(newRows);
+  }
+
   private int indexOf(Object[] row) {
     for (int i = 0; i < rows.size(); i++) {
       if (Arrays.deepEquals(rows.get(i), row)) {
