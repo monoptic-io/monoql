@@ -791,6 +791,16 @@ class SessionTest {
     assertTrue(session.explain("drop table t")
         .startsWith("MetadataModify(table=[METADATA, TABLES], "
             + "operation=DELETE)"));
+    // A write to a table is the engine's to apply; what it reads is
+    // planned, and nothing is written.
+    final String plan = session.explain("insert into t select a + 1 from t");
+    assertTrue(plan.startsWith("TableModify(table=[MEMORY, MAIN, T], "
+        + "operation=INSERT)"), plan);
+    assertTrue(plan.contains("EnumerableTableScan(table=[[MEMORY, MAIN, T]])"),
+        plan);
+    session.explain("update t set a = 0 where a = 1");
+    session.explain("delete from t where a = 1");
+    assertEquals(List.of("[3]"), rows(session, "select sum(a) from t"));
     assertEquals(1, rows(session, "explain plan for select * from t").size());
   }
 

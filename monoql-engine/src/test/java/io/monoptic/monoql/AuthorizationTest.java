@@ -61,6 +61,8 @@ class AuthorizationTest {
     denied(ann, "explain plan for select * from t");
     assertThrows(AccessDeniedException.class,
         () -> ann.explain("select * from t"));
+    assertThrows(AccessDeniedException.class,
+        () -> ann.explain("insert into t select id from u"));
     // A session with no user is not checked.
     assertEquals(2, rows(root, "select * from t").size());
   }
@@ -77,6 +79,9 @@ class AuthorizationTest {
     denied(bob, "select * from t");
 
     run(root, "grant insert, delete on t to ann");
+    // Explaining a statement says whether it would be allowed, and does
+    // not run it.
+    ann.explain("insert into t select id + 1 from t");
     run(ann, "insert into t values (3)", "delete from t where id = 1");
     denied(ann, "update t set id = 0");
     // Reading in order to write is still reading.
