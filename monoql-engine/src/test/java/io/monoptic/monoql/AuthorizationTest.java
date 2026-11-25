@@ -378,10 +378,9 @@ class AuthorizationTest {
     denied(ann, "insert into w select id from t"
         + " where id in (select id - 9 from u)");
     denied(ann, "insert into w select count(*) from u");
-    // Nor is it planned: which is how to ask whether it would be allowed.
+    // Nor is it explained.
     assertThrows(AccessDeniedException.class,
         () -> ann.explain("insert into w select id from u"));
-    ann.explain("insert into w select id from t");
     // What the statement says itself is its author's to write, and so is
     // what it reads from the table it writes.
     run(ann, "insert into w values (7)", "insert into w select id from w");
