@@ -16,6 +16,7 @@ import io.monoptic.monoql.catalog.Key;
 import io.monoptic.monoql.catalog.MaterializedViewInfo;
 import io.monoptic.monoql.catalog.NotFoundException;
 import io.monoptic.monoql.catalog.UnsupportedException;
+import io.monoptic.monoql.catalog.ViewInfo;
 import io.monoptic.monoql.catalog.WritableTable;
 import io.monoptic.monoql.engine.Lowered.Step;
 
@@ -446,6 +447,8 @@ public final class Engine implements Lowering.Context {
       target = modify.getTable().getQualifiedName();
       operation = modify.getOperation().name();
     }
+    final List<List<String>> sources = new ArrayList<>();
+    boolean flows = false;
     for (List<String> name : planner.named()) {
       if (name.size() != 3) {
         continue;
@@ -453,11 +456,67 @@ public final class Engine implements Lowering.Context {
       if (name.equals(target) && isMaterializedView(name)) {
         // Its rows are its owner's to write, however they are written.
         authorizer.checkRows(name.get(0), name.get(1), name.get(2));
+      } else if (name.equals(target)) {
+        authorizer.checkRelation(name.get(0), name.get(1), name.get(2),
+            operation);
+        flows = true;
       } else {
         authorizer.checkRelation(name.get(0), name.get(1), name.get(2),
-            name.equals(target) ? operation : "SELECT");
+            "SELECT");
+        sources.add(name);
       }
     }
+    if (flows) {
+      // The user may write the table; but perhaps not what this reads.
+      authorizer.checkFlows(target.get(0), target.get(1), target.get(2),
+          operation, sources, this::reads);
+    }
+  }
+
+  /** Returns the full names of the tables and views that a view or
+   * materialized view is defined over; null if {@code name} is not one. */
+  private List<List<String>> reads(List<String> name) {
+    final Catalog catalog = registry.catalog(name.get(0));
+    if (catalog == null) {
+      return null;
+    }
+    final Key key = Key.of(name.get(1), name.get(2));
+    String definition = null;
+    try {
+      definition =
+          catalog.views().get(key).map(ViewInfo::definition).orElse(null);
+    } catch (UnsupportedException e) {
+      // A catalog with no views has none to look through.
+    }
+    if (definition == null) {
+      try {
+        definition = catalog.materializedViews().get(key)
+            .map(MaterializedViewInfo::definition).orElse(null);
+      } catch (UnsupportedException e) {
+        // Likewise.
+      }
+    }
+    if (definition == null) {
+      return null;
+    }
+    final QueryPlanner planner =
+        new QueryPlanner(config, rootSchema, List.of(name.subList(0, 2)));
+    final SqlNode query;
+    try {
+      query = SqlParser.create(definition, config.getParserConfig())
+          .parseQuery();
+    } catch (SqlParseException e) {
+      throw new CatalogException("Invalid view definition: "
+          + e.getMessage(), e);
+    }
+    planner.rel(validate(planner, query));
+    final List<List<String>> reads = new ArrayList<>();
+    for (List<String> read : planner.named()) {
+      if (read.size() == 3) {
+        reads.add(read);
+      }
+    }
+    return reads;
   }
 
   /** Reads a cursor a row at a time, and no sooner than asked: asking for

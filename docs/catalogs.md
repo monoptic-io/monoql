@@ -121,7 +121,7 @@ with equal keys are the same object.
 | `JOBS` | `Job(schemaName, jobName, submittedAt, submittedBy, statement, continuous, paused, options, state, startedAt, finishedAt, error)` | schema, job, time |
 | `ROLES` | `RoleInfo(roleName, comment, options)` | role |
 | `USERS` | `UserInfo(userName, comment, options)` | user |
-| `GRANTS` | `Grant(privilege, objectType, objectSchema, objectName, granteeType, grantee, grantable)` | all but `grantable` |
+| `GRANTS` | `Grant(privilege, objectType, objectSchema, objectName, granteeType, grantee, grantable, sourceCatalog, sourceSchema, sourceName)` | all but `grantable` |
 | `ROLE_GRANTS` | `RoleGrant(roleName, granteeType, grantee)` | all |
 
 Things to know:
@@ -137,6 +137,12 @@ Things to know:
 - **Grants are levelled** by which name columns are set: a catalog grant has
   neither `objectSchema` nor `objectName`; a schema grant has `objectSchema`;
   an object grant has both.
+- **A grant to write may have a source** (`GRANT ... USING`): the catalog,
+  schema and table that the rows written may be read from, levelled as the
+  object is. `sourceCatalog` is null for a grant with no source, and such a
+  grant's key is the six parts it has always been. Only `INSERT`, `UPDATE`
+  and `DELETE` take one. A catalog that cannot keep a source must refuse
+  the row, as the `jdbc` catalog does, and not keep it without.
 - `granteeType` is `USER`, `ROLE`, `GROUP`, or `PRINCIPAL` when the statement
   did not say. A statement that names a kind also matches rows whose kind is
   `PRINCIPAL`, so a backend that cannot tell users from roles can report

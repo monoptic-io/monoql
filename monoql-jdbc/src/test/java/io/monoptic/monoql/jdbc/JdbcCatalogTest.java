@@ -237,8 +237,10 @@ class JdbcCatalogTest {
     // Grants made in the database are visible here. JDBC cannot say what
     // kind of principal a grantee is.
     assertEquals(
-        List.of("[INSERT, TABLE, SALES, ORDERS, PRINCIPAL, ANALYST, false]",
-            "[SELECT, TABLE, SALES, ORDERS, PRINCIPAL, ANALYST, false]"),
+        List.of("[INSERT, TABLE, SALES, ORDERS, PRINCIPAL, ANALYST, false,"
+                + " null, null, null]",
+            "[SELECT, TABLE, SALES, ORDERS, PRINCIPAL, ANALYST, false,"
+                + " null, null, null]"),
         rows("show grants on orders to role analyst"));
     session.execute("revoke insert on orders from role analyst");
     assertEquals(List.of("[SELECT]"),
@@ -255,6 +257,7 @@ class JdbcCatalogTest {
             "create trigger tr on orders as 'x'",
             "create user u",
             "grant usage on schema sales to role r",
+            "grant insert on orders using schema sales to role r",
             "grant role r to user u",
             "create table t (a int) with (k = 'v')",
             "create table t (a int) comment 'c'",

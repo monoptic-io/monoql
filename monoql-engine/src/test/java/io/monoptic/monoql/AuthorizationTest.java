@@ -364,6 +364,133 @@ class AuthorizationTest {
             + " from metadata.grants order by 1"));
   }
 
+  /** A grant to write may say what the rows written may be read from. */
+  @Test void sources() {
+    run(root, "create table w (id int)", "create table x (id int)",
+        "grant select on schema s to ann",
+        "grant insert on w using t to ann");
+    run(ann, "insert into w select id from t",
+        "insert into w select t.id from t join t as again on true");
+    assertEquals("User ANN lacks INSERT on C.S.W of what is read from C.S.U",
+        denied(ann, "insert into w select id from u"));
+    // Wherever in the statement it is read, and whatever is made of it.
+    denied(ann, "insert into w select t.id from t join u on t.id = u.id");
+    denied(ann, "insert into w select id from t"
+        + " where id in (select id - 9 from u)");
+    denied(ann, "insert into w select count(*) from u");
+    // What the statement says itself is its author's to write, and so is
+    // what it reads from the table it writes.
+    run(ann, "insert into w values (7)", "insert into w select id from w");
+    // INSERT is not DELETE, and W is not X.
+    denied(ann, "delete from w where id in (select id from t)");
+    denied(ann, "insert into x select id from t");
+
+    // A source may be a schema or a catalog; no source is any source.
+    run(root, "create schema other", "create table other.o (id int)",
+        "grant select on schema other to ann",
+        "grant delete on w using schema other to ann",
+        "grant update on w using catalog c to ann",
+        "grant insert on x to ann");
+    run(ann, "delete from w where id in (select id from other.o)",
+        "update w set id = (select max(id) from u)",
+        "update w set id = (select max(id) from other.o)",
+        "insert into x select id from u");
+    denied(ann, "delete from w where id in (select id from u)");
+
+    // A grant on a schema, of a source.
+    run(root, "grant insert on schema other using u to bob",
+        "grant select on schema s to bob");
+    run(bob, "insert into other.o select id from u");
+    denied(bob, "insert into other.o select id from t");
+
+    // Revoking the grant that has no source leaves the ones that have;
+    // and the other way about.
+    run(root, "grant insert on w to ann", "revoke insert on w from ann");
+    run(ann, "insert into w select id from t");
+    denied(ann, "insert into w select id from u");
+    run(root, "grant insert on w to ann",
+        "revoke insert on w using t from ann");
+    run(ann, "insert into w select id from t");
+    assertEquals(
+        List.of("[DELETE, W, C, OTHER, null]", "[INSERT, W, null, null, null]",
+            "[UPDATE, W, C, null, null]"),
+        rows(root, "select privilege, object_name, source_catalog,"
+            + " source_schema, source_name from metadata.grants"
+            + " where object_name = 'W' order by 1"));
+  }
+
+  /** What a view reads is read by whoever reads the view. */
+  @Test void sourcesThroughViews() {
+    run(root, "create table w (id int)",
+        "create view v as select id from u",
+        "create view vv as select v.id from v join t on true",
+        "create materialized view m as select id from u",
+        "grant select on schema s to ann",
+        "grant insert on w using t to ann");
+    assertEquals("User ANN lacks INSERT on C.S.W of what is read from C.S.V",
+        denied(ann, "insert into w select id from v"));
+    denied(ann, "insert into w select id from vv");
+    denied(ann, "insert into w select id from m");
+    // Either by a grant of what it reads,
+    run(root, "grant insert on w using u to ann");
+    run(ann, "insert into w select id from v",
+        "insert into w select id from vv",
+        "insert into w select id from m");
+    // or by one of the view, which says nothing of what it reads.
+    run(root, "revoke insert on w using u from ann",
+        "grant insert on w using v to ann");
+    run(ann, "insert into w select id from v",
+        "insert into w select id from vv");
+    denied(ann, "insert into w select id from u");
+    denied(ann, "insert into w select id from m");
+  }
+
+  /** A grant goes with its source, and follows it when it is renamed. */
+  @Test void grantsFollowSources() {
+    run(root, "create table w (id int)", "create schema other",
+        "create table other.o (id int)",
+        "grant select on schema s to ann", "grant select on schema other to ann",
+        "grant insert on w using u to ann",
+        "grant insert on w using other.o to ann",
+        "grant insert on w using schema other to bob");
+    run(root, "alter table u rename to u2");
+    run(ann, "insert into w select id from u2");
+    run(root, "drop table u2", "create table u2 (id int)",
+        "create table u (id int)");
+    denied(ann, "insert into w select id from u2");
+    denied(ann, "insert into w select id from u");
+    // The table that is written to is renamed: the source stays.
+    run(root, "alter table w rename to w2");
+    run(ann, "insert into w2 select id from other.o");
+    run(root, "drop table other.o", "drop schema other");
+    assertEquals(List.of(),
+        rows(root, "select grantee from metadata.grants"
+            + " where source_catalog is not null"));
+  }
+
+  @Test void grantOptionOfASource() {
+    run(root, "create table w (id int)",
+        "grant insert on w using schema s to ann with grant option");
+    run(ann, "grant insert on w using t to bob",
+        "grant insert on w using schema s to bob");
+    assertEquals("User ANN may not grant or revoke INSERT on C.S.W: that"
+            + " takes OWNERSHIP of it, or INSERT WITH GRANT OPTION",
+        denied(ann, "grant insert on w to bob"));
+    assertEquals("User ANN may not grant or revoke INSERT on C.S.W of what"
+            + " is read from C: that takes OWNERSHIP of it, or INSERT WITH"
+            + " GRANT OPTION",
+        denied(ann, "grant insert on w using catalog c to bob"));
+    denied(ann, "grant delete on w using t to bob");
+    run(ann, "revoke insert on w using t from bob");
+    // The row is the statement, and is held to the same rules.
+    assertThrows(CatalogException.class,
+        () -> root.execute("insert into metadata.grants (privilege,"
+            + " object_type, object_schema, object_name, grantee_type,"
+            + " grantee, grantable, source_catalog, source_schema)"
+            + " values ('SELECT', 'TABLE', 'S', 'W', 'USER', 'BOB', false,"
+            + " 'C', 'S')"));
+  }
+
   @Test void grantOption() {
     run(root, "grant select on t to ann", "grant insert on t to ann");
     assertEquals("User ANN may not grant or revoke SELECT on C.S.T: that takes"

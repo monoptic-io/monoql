@@ -614,6 +614,8 @@ SqlNode SqlGrantStmt() :
     String item;
     ObjectKind kind = null;
     SqlIdentifier object = null;
+    ObjectKind sourceKind = null;
+    SqlIdentifier source = null;
     final List<SqlGrant.Grantee> grantees = new ArrayList<SqlGrant.Grantee>();
     boolean grantOption = false;
 }
@@ -632,6 +634,7 @@ SqlNode SqlGrantStmt() :
     item = Privilege() { items.add(item); }
     ( <COMMA> item = Privilege() { items.add(item); } )*
     [ <ON> kind = SecurableKindOpt() object = CompoundIdentifier() ]
+    [ <USING> sourceKind = SecurableKindOpt() source = CompoundIdentifier() ]
     (
         <TO> {
             if (action != SqlGrant.Action.GRANT) {
@@ -660,8 +663,19 @@ SqlNode SqlGrantStmt() :
         if (grantOption && action != SqlGrant.Action.GRANT) {
             throw new ParseException("WITH GRANT OPTION requires GRANT");
         }
+        if (source != null) {
+            if (object == null) {
+                throw new ParseException(
+                    "USING applies to privileges, and requires ON");
+            }
+            if (sourceKind == ObjectKind.FUNCTION
+                || sourceKind == ObjectKind.TRIGGER) {
+                throw new ParseException("USING takes a catalog, a schema,"
+                    + " or a table or view, not a " + sourceKind.sql);
+            }
+        }
         return new SqlGrant(s.end(this), action, items, kind, object,
-            grantees, grantOption);
+            sourceKind, source, grantees, grantOption);
     }
 }
 

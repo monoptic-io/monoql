@@ -317,6 +317,43 @@ class MetastoreTest {
         rows(globex, "select schema_name from metadata.schemas"));
   }
 
+  /** Grants with sources are kept, beside those with none; and a grant
+   * that was stored before grants had sources is one with none. */
+  @Test void sourcesOfGrants() throws Exception {
+    final Session first = session("acme");
+    run(first, "create schema s", "use s", "create table t (a int)",
+        "create table u (a int)", "grant insert on t to role r",
+        "grant insert on t using u to role r",
+        "grant insert on t using schema s to role r");
+    final Map<String, String> o = options("acme");
+    try (Connection c =
+            DriverManager.getConnection(o.get("url"), o.get("user"),
+                o.get("password"));
+        java.sql.PreparedStatement old =
+            c.prepareStatement("update monoql_metadata set row_data = ?"
+                + " where tenant_id = ? and table_name = 'GRANTS'"
+                + " and row_key = ?")) {
+      old.setString(1, "{\"privilege\":\"INSERT\",\"objectType\":\"TABLE\","
+          + "\"objectSchema\":\"S\",\"objectName\":\"T\","
+          + "\"granteeType\":\"ROLE\",\"grantee\":\"R\","
+          + "\"grantable\":false}");
+      old.setString(2, o.get("tenant"));
+      old.setString(3, "[\"INSERT\",\"TABLE\",\"S\",\"T\",\"ROLE\",\"R\"]");
+      assertEquals(1, old.executeUpdate());
+    }
+    final Session second = session("acme");
+    final String grants = "select source_catalog, source_schema, source_name"
+        + " from metadata.grants order by 2, 3";
+    assertEquals(
+        List.of("[LAKE, S, U]", "[LAKE, S, null]", "[null, null, null]"),
+        rows(second, grants));
+    run(second, "revoke insert on lake.s.t from role r");
+    assertEquals(List.of("[LAKE, S, U]", "[LAKE, S, null]"),
+        rows(first, grants));
+    run(second, "drop table lake.s.u");
+    assertEquals(List.of("[LAKE, S, null]"), rows(first, grants));
+  }
+
   /** Several servers, one metastore: what each checks before it writes is
    * still true when it writes. */
   @Test void writersTakeTurns() throws Exception {

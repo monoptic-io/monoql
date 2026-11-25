@@ -300,8 +300,10 @@ CREATE [OR REPLACE] {ROLE | USER} [IF NOT EXISTS] [catalog.]name
   [COMMENT 'text'] [WITH (...)]
 DROP {ROLE | USER} [IF EXISTS] [catalog.]name
 
-GRANT privilege [, ...] ON [kind] object TO grantee [, ...] [WITH GRANT OPTION]
-REVOKE [GRANT OPTION FOR] privilege [, ...] ON [kind] object FROM grantee [, ...]
+GRANT privilege [, ...] ON [kind] object [USING source]
+  TO grantee [, ...] [WITH GRANT OPTION]
+REVOKE [GRANT OPTION FOR] privilege [, ...] ON [kind] object [USING source]
+  FROM grantee [, ...]
 
 GRANT [ROLE] role [, ...] TO grantee [, ...]
 REVOKE [ROLE] role [, ...] FROM grantee [, ...]
@@ -309,6 +311,8 @@ REVOKE [ROLE] role [, ...] FROM grantee [, ...]
 kind:    CATALOG | SCHEMA | DATABASE | TABLE | VIEW | MATERIALIZED VIEW
        | FUNCTION | TRIGGER            -- default TABLE
 grantee: [USER | ROLE | GROUP] name
+source:  CATALOG name | {SCHEMA | DATABASE} name
+       | [TABLE | VIEW | MATERIALIZED VIEW] name
 ```
 
 | Statement | DML |
@@ -331,6 +335,19 @@ grantee: [USER | ROLE | GROUP] name
 - Granting what is already granted is not an error, and can change
   grantability. Revoking what was never granted is not an error.
 - `REVOKE ALL ON x FROM y` removes every privilege `y` holds on `x`.
+- `USING` goes with `INSERT`, `UPDATE` and `DELETE`, and says where the rows
+  that are written may have been read from: `GRANT INSERT ON outbox USING
+  customers TO agent` lets `agent` insert into `outbox` what it reads from
+  `customers`, and nothing it reads from anywhere else. The source is
+  recorded in `SOURCE_CATALOG`, `SOURCE_SCHEMA` and `SOURCE_NAME`, by its
+  full name: a table or view, a schema (no `SOURCE_NAME`), or a catalog
+  (neither). A grant without `USING` has none of them, and is of whatever
+  is read. See [Sources](#sources).
+- The same privilege on the same object can be granted of several sources,
+  and each is a grant of its own. A `REVOKE` removes the grants that were
+  written as it is: with `USING`, those of that source; without, those
+  with no source, and it leaves the others. That goes for `REVOKE ALL`
+  too.
 - A `GRANT` with no `ON` clause grants roles, with or without the word `ROLE`.
 
 ### Enforcement
@@ -388,6 +405,52 @@ the catalogs. The identity is shown by `SHOW SETTINGS` (`user`, `groups`) and
   owner just as `CREATE TABLE` does.
 - A catalog is checked only if it has a `GRANTS` table that can be read. One
   that does not (the `jdbc` catalog, for example) is left to its backend.
+
+#### Sources
+
+Being able to read one table and write another lets a user copy the first
+into the second. A grant to write that has a source (`USING`) allows that
+for the tables it names and no others.
+
+```sql
+GRANT SELECT ON SCHEMA crm TO agent;
+GRANT INSERT ON outbox USING crm.customers TO agent;
+
+INSERT INTO outbox SELECT email FROM crm.customers;           -- allowed
+INSERT INTO outbox SELECT email FROM crm.leads;               -- refused
+INSERT INTO outbox SELECT c.email FROM crm.customers AS c
+  WHERE c.id IN (SELECT customer_id FROM crm.complaints);     -- refused
+```
+
+- An `INSERT`, `UPDATE` or `DELETE` is checked for each table and view it
+  reads, other than the one it writes: the user needs a grant of that
+  privilege on the table written that has no source, or whose source is
+  that table or view, its schema or its catalog. The grants need not be
+  the same one for each.
+- Everything the statement reads counts, wherever it is read: a table that
+  only decides which rows are written says something through them.
+- A view or materialized view is included by a source that names it, or by
+  sources that between them include everything it is defined over, however
+  many views deep. So a grant of a view that leaves columns out allows
+  writing what the view shows and not the rest of its table.
+- A statement that reads no table (`INSERT ... VALUES`, a `DELETE` with a
+  plain condition) writes what its author put in it, and any grant of the
+  privilege on the table allows it, with a source or without.
+- This is about one statement. A user who may copy `customers` into a
+  table `t`, and `t` into `outbox`, can do both; whoever grants the second
+  decides what `t` is trusted to hold.
+- A source is in addition to `SELECT` on what is read, not instead of it.
+- Granting a privilege of a source takes ownership of the object, or the
+  privilege `WITH GRANT OPTION` of a source that includes it.
+- Dropping a table, view or schema deletes the grants it is the source of,
+  in every catalog of the session that keeps grants, and renaming it moves
+  them; as for the grants on it.
+- A source is recorded by the name its catalog is mounted under. The grant
+  is kept in the catalog of the object that is written, and that catalog
+  must keep such grants: the in-memory and `metastore` catalogs do; the
+  `jdbc` catalog does not.
+- The rows of a materialized view are its owner's to write, of whatever
+  the owner can read.
 
 Not there yet: separate privileges for the different ways of changing an
 object (they all take ownership); `EXECUTE` on functions; and

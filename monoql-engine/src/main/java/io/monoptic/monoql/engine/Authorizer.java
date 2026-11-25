@@ -7,6 +7,7 @@ package io.monoptic.monoql.engine;
 import io.monoptic.monoql.Identity;
 import io.monoptic.monoql.catalog.AccessDeniedException;
 import io.monoptic.monoql.catalog.Catalog;
+import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Grant;
 import io.monoptic.monoql.catalog.MetaTable;
 import io.monoptic.monoql.catalog.RoleGrant;
@@ -41,6 +42,15 @@ import java.util.function.UnaryOperator;
  * <li>Reading a table or view takes {@code SELECT} on it; writing one takes
  *     {@code INSERT}, {@code UPDATE} or {@code DELETE}. A view is read with
  *     the rights of whoever defined it: its tables are not checked again.
+ * <li>A grant to write that has a source allows writing only what the
+ *     statement reads from that source. So a statement that writes one
+ *     table and reads others needs, for each one it reads, a grant to
+ *     write that has no source or has a source that includes it. What a
+ *     view or materialized view reads counts as read too: it is included
+ *     by a source that names it, or by sources that between them include
+ *     everything it is defined over. A statement that reads no table
+ *     writes only what its author wrote in it, which any of those grants
+ *     allows.
  * <li>Creating an object (inserting its metadata row) takes
  *     {@code CREATE TABLE}, {@code CREATE VIEW} and so on, on the schema;
  *     {@code CREATE SCHEMA} is held on the catalog. The user who creates
@@ -48,14 +58,16 @@ import java.util.function.UnaryOperator;
  * <li>Changing or dropping an object, or anything that belongs to it (a
  *     column, a partition), takes ownership.
  * <li>Granting or revoking a privilege on an object takes ownership of it,
- *     or that privilege with the grant option.
+ *     or that privilege with the grant option, of a source that includes
+ *     the one granted.
  * <li>Roles, users and role membership take ownership of the catalog.
  * <li>Reading metadata is open to every user.
  * </ul>
  *
  * <p>Whoever the session acts as, dropping an object removes the grants on
  * it, and renaming it carries them along; otherwise they would apply to
- * whatever next took the name. */
+ * whatever next took the name. The same goes for the grants, in any
+ * catalog, that it is the source of. */
 final class Authorizer {
   static final String ALL = "ALL PRIVILEGES";
   private static final String CATALOG = "CATALOG";
@@ -85,6 +97,16 @@ final class Authorizer {
           "SCHEMAS", new Kind(SCHEMA, null, false),
           "COLUMNS", new Kind("TABLE", "TABLE_NAME", true),
           "PARTITIONS", new Kind("TABLE", "TABLE_NAME", true));
+
+  /** Tells what a view or materialized view is defined over: the full
+   * names of the tables and views its definition names. */
+  interface Definitions {
+    /** Returns what {@code name} reads; null if it is not a view. */
+    List<List<String>> reads(List<String> name);
+  }
+
+  /** How deep views may be defined over views. */
+  private static final int MAX_VIEW_DEPTH = 64;
 
   /** What is being done to a metadata row. */
   enum Op { INSERT, UPDATE, DELETE }
@@ -202,6 +224,52 @@ final class Authorizer {
     return false;
   }
 
+  /** Whether a grant allows writing what is read from a table or view. */
+  private static boolean from(Grant g, List<String> source) {
+    return within(g.sourceCatalog(), g.sourceSchema(), g.sourceName(),
+        source.get(0), source.get(1), source.get(2));
+  }
+
+  /** Whether one source includes another. No source at all is every
+   * source; a catalog includes its schemas, and a schema its tables. */
+  private static boolean within(String catalog, String schema, String name,
+      String otherCatalog, String otherSchema, String otherName) {
+    return catalog == null
+        || catalog.equals(otherCatalog)
+        && (schema == null
+            || schema.equals(otherSchema)
+            && (name == null || name.equals(otherName)));
+  }
+
+  /** Whether some grant of a privilege on a table allows writing what is
+   * read from a source: one that includes it; or, for a view, grants that
+   * allow everything the view reads. */
+  private static boolean allows(List<Grant> grants, String privilege,
+      String schema, String name, List<String> source,
+      Definitions definitions, int depth) {
+    for (Grant g : grants) {
+      if (includes(g, privilege) && covers(g, "TABLE", schema, name)
+          && from(g, source)) {
+        return true;
+      }
+    }
+    final List<List<String>> reads = definitions.reads(source);
+    if (reads == null || reads.isEmpty()) {
+      return false;
+    }
+    if (depth > MAX_VIEW_DEPTH) {
+      throw new CatalogException("View " + String.join(".", source)
+          + " is nested too deeply; is it defined in terms of itself?");
+    }
+    for (List<String> read : reads) {
+      if (!allows(grants, privilege, schema, name, read, definitions,
+          depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private static String path(String catalog, String schema, String name) {
     return catalog + (schema == null ? "" : "." + schema)
         + (name == null ? "" : "." + name);
@@ -218,6 +286,29 @@ final class Authorizer {
         && !holds(grants, privilege, false, "TABLE", schema, name)) {
       throw new AccessDeniedException("User " + user + " lacks " + privilege
           + " on " + path(catalog, schema, name));
+    }
+  }
+
+  /** Checks that the user may write to a table what a statement reads
+   * from others; after {@link #checkRelation}, which checks that the user
+   * may write to it at all.
+   *
+   * @param privilege {@code INSERT}, {@code UPDATE} or {@code DELETE}
+   * @param sources Full names of the tables and views the statement reads,
+   *     other than the table it writes */
+  void checkFlows(String catalog, String schema, String name,
+      String privilege, Iterable<List<String>> sources,
+      Definitions definitions) {
+    final List<Grant> grants = grants(catalog);
+    if (grants == null) {
+      return;
+    }
+    for (List<String> source : sources) {
+      if (!allows(grants, privilege, schema, name, source, definitions, 0)) {
+        throw new AccessDeniedException("User " + user + " lacks " + privilege
+            + " on " + path(catalog, schema, name) + " of what is read from "
+            + String.join(".", source));
+      }
     }
   }
 
@@ -258,7 +349,8 @@ final class Authorizer {
     if (table.equals("GRANTS")) {
       checkGrant(grants, catalog, String.valueOf(row.apply("PRIVILEGE")),
           row.apply("OBJECT_TYPE"), row.apply("OBJECT_SCHEMA"),
-          row.apply("OBJECT_NAME"));
+          row.apply("OBJECT_NAME"), row.apply("SOURCE_CATALOG"),
+          row.apply("SOURCE_SCHEMA"), row.apply("SOURCE_NAME"));
       return;
     }
     final Kind kind = KINDS.get(table);
@@ -291,23 +383,39 @@ final class Authorizer {
 
   /** Checks that the user may write a row of {@code GRANTS}: by owning the
    * object, or by holding the same privilege on it with the grant
-   * option. */
+   * option, of no less a source. */
   private void checkGrant(List<Grant> grants, String catalog,
       String privilege, String objectType, String objectSchema,
-      String objectName) {
-    if (!holds(grants, OWNERSHIP, false, objectType, objectSchema, objectName)
-        && !holds(grants, privilege, true, objectType, objectSchema,
-            objectName)) {
-      throw new AccessDeniedException("User " + user + " may not grant or"
-          + " revoke " + privilege + " on "
-          + path(catalog, objectSchema, objectName) + ": that takes "
-          + OWNERSHIP + " of it, or " + privilege + " WITH GRANT OPTION");
+      String objectName, String sourceCatalog, String sourceSchema,
+      String sourceName) {
+    if (holds(grants, OWNERSHIP, false, objectType, objectSchema,
+        objectName)) {
+      return;
     }
+    for (Grant g : grants) {
+      if (g.grantable() && includes(g, privilege)
+          && covers(g, objectType, objectSchema, objectName)
+          && (!g.sourced()
+              || sourceCatalog != null
+              && within(g.sourceCatalog(), g.sourceSchema(), g.sourceName(),
+                  sourceCatalog, sourceSchema, sourceName))) {
+        return;
+      }
+    }
+    throw new AccessDeniedException("User " + user + " may not grant or"
+        + " revoke " + privilege + " on "
+        + path(catalog, objectSchema, objectName)
+        + (sourceCatalog == null ? ""
+            : " of what is read from "
+                + path(sourceCatalog, sourceSchema, sourceName))
+        + ": that takes " + OWNERSHIP + " of it, or " + privilege
+        + " WITH GRANT OPTION");
   }
 
   /** Brings {@code GRANTS} into step with a row that has just been
    * written: the creator of an object owns it; the grants on an object go
-   * when it does, and follow it when it is renamed.
+   * when it does, and follow it when it is renamed, as do the grants it
+   * is the source of.
    *
    * @param before The row deleted or updated, as for {@link #checkWrite};
    *     null for an insert
@@ -319,6 +427,20 @@ final class Authorizer {
     if (kind == null || kind.part || catalog == null) {
       return;
     }
+    final String schema = (after != null ? after : before).apply("SCHEMA_NAME");
+    final String name = kind.nameColumn == null ? null
+        : (after != null ? after : before).apply(kind.nameColumn);
+    if (before != null
+        && (kind.type.equals(SCHEMA) || RELATIONS.contains(kind.type))) {
+      final String oldSchema = before.apply("SCHEMA_NAME");
+      final String oldName =
+          kind.nameColumn == null ? null : before.apply(kind.nameColumn);
+      if (after == null || !Objects.equals(oldSchema, schema)
+          || !Objects.equals(oldName, name)) {
+        sourceChanged(catalogName, oldSchema, oldName,
+            after == null ? null : schema, name);
+      }
+    }
     final MetaTable<Grant> grants = catalog.grants();
     final List<Grant> all = new ArrayList<>();
     try {
@@ -326,9 +448,6 @@ final class Authorizer {
     } catch (UnsupportedException e) {
       return; // not a catalog whose grants are ours to keep
     }
-    final String schema = (after != null ? after : before).apply("SCHEMA_NAME");
-    final String name = kind.nameColumn == null ? null
-        : (after != null ? after : before).apply(kind.nameColumn);
     if (before == null) {
       if (user != null) {
         final Grant owner =
@@ -358,7 +477,42 @@ final class Authorizer {
       if (after != null) {
         grants.insert(
             new Grant(g.privilege(), g.objectType(), schema, name,
-                g.granteeType(), g.grantee(), g.grantable()));
+                g.granteeType(), g.grantee(), g.grantable(),
+                g.sourceCatalog(), g.sourceSchema(), g.sourceName()));
+      }
+    }
+  }
+
+  /** Removes the grants, in every catalog that keeps them, whose source
+   * is a schema, table or view that has gone; or, if it has only been
+   * renamed, makes them name it as it now is.
+   *
+   * @param name Name of the table or view; null for a schema
+   * @param newSchema Its schema now; null if it has gone */
+  private void sourceChanged(String catalogName, String schema, String name,
+      String newSchema, String newName) {
+    for (Catalog catalog : registry.catalogs().values()) {
+      final MetaTable<Grant> grants = catalog.grants();
+      final List<Grant> sourced = new ArrayList<>();
+      try {
+        for (Grant g : grants.scan()) {
+          if (catalogName.equals(g.sourceCatalog())
+              && Objects.equals(g.sourceSchema(), schema)
+              && Objects.equals(g.sourceName(), name)) {
+            sourced.add(g);
+          }
+        }
+      } catch (UnsupportedException e) {
+        continue;
+      }
+      for (Grant g : sourced) {
+        grants.delete(g);
+        if (newSchema != null) {
+          grants.insert(
+              new Grant(g.privilege(), g.objectType(), g.objectSchema(),
+                  g.objectName(), g.granteeType(), g.grantee(), g.grantable(),
+                  catalogName, newSchema, newName));
+        }
       }
     }
   }

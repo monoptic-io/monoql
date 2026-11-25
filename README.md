@@ -54,7 +54,8 @@ WHERE "CATALOG_NAME" = 'MEMORY'
   AND "OBJECT_SCHEMA" = 'MAIN'
   AND "OBJECT_NAME" = 'ORDERS'
   AND "PRIVILEGE" = 'SELECT'
-  AND "GRANTEE_TYPE" IN ('ROLE', 'PRINCIPAL') AND "GRANTEE" = 'ANALYST';
+  AND "GRANTEE_TYPE" IN ('ROLE', 'PRINCIPAL') AND "GRANTEE" = 'ANALYST'
+  AND "SOURCE_CATALOG" IS NULL;
 ```
 
 `!lower` prints what a statement is shorthand for. Paste that `DELETE` in and

@@ -486,8 +486,10 @@ class SessionTest {
         "grant select, insert on t to role analyst, user 'bob@example.com' "
             + "with grant option");
     assertEquals(
-        List.of("[INSERT, TABLE, MAIN, T, ROLE, ANALYST, true]",
-            "[SELECT, TABLE, MAIN, T, ROLE, ANALYST, true]"),
+        List.of("[INSERT, TABLE, MAIN, T, ROLE, ANALYST, true,"
+                + " null, null, null]",
+            "[SELECT, TABLE, MAIN, T, ROLE, ANALYST, true,"
+                + " null, null, null]"),
         rows(session, "show grants on t to role analyst"));
 
     // Granting again is not an error, and can change grantability.
@@ -512,8 +514,10 @@ class SessionTest {
     run(session, "grant usage on catalog memory to analyst",
         "grant usage on schema main to analyst");
     assertEquals(
-        List.of("[USAGE, CATALOG, null, null, PRINCIPAL, ANALYST, false]",
-            "[USAGE, SCHEMA, MAIN, null, PRINCIPAL, ANALYST, false]"),
+        List.of("[USAGE, CATALOG, null, null, PRINCIPAL, ANALYST, false,"
+                + " null, null, null]",
+            "[USAGE, SCHEMA, MAIN, null, PRINCIPAL, ANALYST, false,"
+                + " null, null, null]"),
         rows(session, "show grants to analyst"));
 
     // Roles.
@@ -553,8 +557,10 @@ class SessionTest {
         + "values ('SELECT', 'TABLE', 'MAIN', 'T', 'ROLE', 'R'), "
         + "('UPDATE', 'TABLE', 'MAIN', 'T', 'ROLE', 'R')");
     assertEquals(
-        List.of("[SELECT, TABLE, MAIN, T, ROLE, R, false]",
-            "[UPDATE, TABLE, MAIN, T, ROLE, R, false]"),
+        List.of("[SELECT, TABLE, MAIN, T, ROLE, R, false,"
+                + " null, null, null]",
+            "[UPDATE, TABLE, MAIN, T, ROLE, R, false,"
+                + " null, null, null]"),
         rows(session, "show grants on t"));
     assertThrows(AlreadyExistsException.class,
         () -> session.execute("insert into metadata.grants (privilege, "

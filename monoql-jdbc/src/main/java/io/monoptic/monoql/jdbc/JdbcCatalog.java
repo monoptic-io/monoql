@@ -524,6 +524,10 @@ public class JdbcCatalog implements Catalog {
       throw new UnsupportedException("A jdbc catalog supports grants on"
           + " tables only, not on " + grant.objectType());
     }
+    if (grant.sourced()) {
+      throw new UnsupportedException("A jdbc catalog does not support"
+          + " grants of what is read from a source (USING)");
+    }
   }
 
   private final MetaTable<Grant> grants = new MetaTable<>() {

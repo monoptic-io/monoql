@@ -4,6 +4,8 @@
  */
 package io.monoptic.monoql;
 
+import io.monoptic.monoql.catalog.CatalogException;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import static io.monoptic.monoql.Sessions.run;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Tests that statements are spellings of DML: what each lowers to, and
  * that running the lowered DML by hand has the same effect as running the
@@ -55,8 +58,38 @@ class LoweringTest {
             + "  AND \"OBJECT_NAME\" IS NULL\n"
             + "  AND \"PRIVILEGE\" IN ('USAGE', 'CREATE TABLE')\n"
             + "  AND \"GRANTEE_TYPE\" IN ('ROLE', 'PRINCIPAL') "
-            + "AND \"GRANTEE\" = 'R'",
+            + "AND \"GRANTEE\" = 'R'\n"
+            + "  AND \"SOURCE_CATALOG\" IS NULL",
         lower("revoke usage, create table on schema s from role r"));
+  }
+
+  /** A grant of what is read from a source is a row that names it. */
+  @Test void grantUsing() {
+    assertEquals("UPSERT INTO \"METADATA\".\"GRANTS\" (\"CATALOG_NAME\", "
+            + "\"PRIVILEGE\", \"OBJECT_TYPE\", \"OBJECT_SCHEMA\", "
+            + "\"OBJECT_NAME\", \"GRANTEE_TYPE\", \"GRANTEE\", "
+            + "\"GRANTABLE\", \"SOURCE_CATALOG\", \"SOURCE_SCHEMA\", "
+            + "\"SOURCE_NAME\")\n"
+            + "VALUES ('MEMORY', 'INSERT', 'TABLE', 'S', 'T', 'ROLE', 'R', "
+            + "FALSE, 'MEMORY', 'S', 'U')",
+        lower("grant insert on t using u to role r"));
+    assertEquals("DELETE FROM \"METADATA\".\"GRANTS\"\n"
+            + "WHERE \"CATALOG_NAME\" = 'MEMORY'\n"
+            + "  AND \"OBJECT_TYPE\" = 'TABLE'\n"
+            + "  AND \"OBJECT_SCHEMA\" = 'S'\n"
+            + "  AND \"OBJECT_NAME\" = 'T'\n"
+            + "  AND \"PRIVILEGE\" = 'INSERT'\n"
+            + "  AND \"GRANTEE_TYPE\" IN ('ROLE', 'PRINCIPAL') "
+            + "AND \"GRANTEE\" = 'R'\n"
+            + "  AND \"SOURCE_CATALOG\" = 'OTHER'\n"
+            + "  AND \"SOURCE_SCHEMA\" = 'X'\n"
+            + "  AND \"SOURCE_NAME\" IS NULL",
+        lower("revoke insert on t using schema other.x from role r"));
+    // It says what may be written, so it goes with nothing else.
+    assertThrows(CatalogException.class,
+        () -> lower("grant select on t using u to role r"));
+    assertThrows(CatalogException.class,
+        () -> lower("grant all on t using u to role r"));
   }
 
   @Test void control() {
@@ -149,6 +182,14 @@ class LoweringTest {
             "grant all on catalog memory to group g",
             "revoke grant option for insert on x.u from user u",
             "revoke select on x.u from role r",
+            "grant insert, delete on x.u using t to role r, user u "
+                + "with grant option",
+            "grant insert on x.u using schema s to r",
+            "grant update on schema x using catalog memory to group g",
+            "revoke grant option for delete on x.u using t from user u",
+            "revoke insert on x.u using t from role r",
+            // Leaves alone the ones that have a source.
+            "revoke insert, delete on x.u from role r, user u",
             "grant role r, r2 to user u",
             "revoke role r2 from user u",
             "alter table x.u rename to w",

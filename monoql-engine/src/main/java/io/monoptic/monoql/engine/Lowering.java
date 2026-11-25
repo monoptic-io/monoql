@@ -693,11 +693,23 @@ final class Lowering {
     // OBJECT_NAME; a grant on a catalog has neither.
     final String objectSchema = object.schema;
     final String objectName = object.name;
+    // Likewise its source, if it has one; and that always has a catalog.
+    final Name source =
+        n.source == null ? null : resolve(n.sourceKind, n.source);
+    if (source != null) {
+      for (String privilege : n.items) {
+        if (!Grant.SOURCED.contains(privilege)) {
+          throw new CatalogException("USING says where the rows that are"
+              + " written may have been read from, so it goes with INSERT,"
+              + " UPDATE and DELETE, not with " + privilege);
+        }
+      }
+    }
     if (n.action == SqlGrant.Action.GRANT) {
       final List<Map<String, String>> rows = new ArrayList<>();
       for (String privilege : n.items) {
         for (SqlGrant.Grantee g : n.grantees) {
-          rows.add(
+          final Map<String, String> row =
               row(CATALOG_NAME, SqlText.str(object.catalog),
                   "PRIVILEGE", SqlText.str(privilege),
                   "OBJECT_TYPE", SqlText.str(n.objectKind.sql),
@@ -705,7 +717,13 @@ final class Lowering {
                   "OBJECT_NAME", SqlText.str(objectName),
                   "GRANTEE_TYPE", SqlText.str(g.type()),
                   "GRANTEE", SqlText.str(g.name()),
-                  "GRANTABLE", SqlText.bool(n.grantOption)));
+                  "GRANTABLE", SqlText.bool(n.grantOption));
+          if (source != null) {
+            row.put("SOURCE_CATALOG", SqlText.str(source.catalog));
+            row.put("SOURCE_SCHEMA", SqlText.str(source.schema));
+            row.put("SOURCE_NAME", SqlText.str(source.name));
+          }
+          rows.add(row);
         }
       }
       // Granting again is not an error; it restates the grant.
@@ -721,6 +739,14 @@ final class Lowering {
       where.add(in("PRIVILEGE", n.items));
     }
     where.add(grantees(n.grantees));
+    // A revoke undoes the grant that was written like it: with no source,
+    // it leaves alone the grants that have one.
+    where.add(SqlText.eq("SOURCE_CATALOG",
+        source == null ? null : source.catalog));
+    if (source != null) {
+      where.add(SqlText.eq("SOURCE_SCHEMA", source.schema));
+      where.add(SqlText.eq("SOURCE_NAME", source.name));
+    }
     // Revoking something that was never granted is not an error.
     if (n.action == SqlGrant.Action.REVOKE_GRANT_OPTION) {
       return targeted(object.catalog, "GRANTS",
@@ -731,11 +757,17 @@ final class Lowering {
     final List<Map<String, Object>> doomed = new ArrayList<>();
     for (String privilege : n.items) {
       for (SqlGrant.Grantee g : n.grantees) {
-        doomed.add(
+        final Map<String, Object> row =
             values(CATALOG_NAME, object.catalog, "PRIVILEGE", privilege,
                 "OBJECT_TYPE", n.objectKind.sql,
                 "OBJECT_SCHEMA", objectSchema, "OBJECT_NAME", objectName,
-                "GRANTEE_TYPE", g.type(), "GRANTEE", g.name()));
+                "GRANTEE_TYPE", g.type(), "GRANTEE", g.name());
+        if (source != null) {
+          row.put("SOURCE_CATALOG", source.catalog);
+          row.put("SOURCE_SCHEMA", source.schema);
+          row.put("SOURCE_NAME", source.name);
+        }
+        doomed.add(row);
       }
     }
     return targeted(object.catalog, "GRANTS",
@@ -1135,8 +1167,9 @@ final class Lowering {
       }
       sql = select(
           cols("PRIVILEGE", "OBJECT_TYPE", "OBJECT_SCHEMA", "OBJECT_NAME",
-              "GRANTEE_TYPE", "GRANTEE", "GRANTABLE"),
-          "GRANTS", where.toString(), "2, 3, 4, 5, 6, 1");
+              "GRANTEE_TYPE", "GRANTEE", "GRANTABLE", "SOURCE_CATALOG",
+              "SOURCE_SCHEMA", "SOURCE_NAME"),
+          "GRANTS", where.toString(), "2, 3, 4, 5, 6, 1, 8, 9, 10");
       break;
     default:
       throw new AssertionError(n.what);

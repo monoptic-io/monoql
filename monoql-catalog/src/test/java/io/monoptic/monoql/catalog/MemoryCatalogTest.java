@@ -72,5 +72,20 @@ class MemoryCatalogTest {
     assertEquals(
         new Grant("SELECT", "TABLE", "S", "T", "ROLE", "R", false).key(),
         new Grant("SELECT", "TABLE", "S", "T", "ROLE", "R", true).key());
+    // Its source is; and a grant with none is keyed as it always was.
+    final Grant sourced =
+        new Grant("INSERT", "TABLE", "S", "T", "ROLE", "R", false, "C", "S",
+            null);
+    assertEquals(
+        Key.of("INSERT", "TABLE", "S", "T", "ROLE", "R", "C", "S", null),
+        sourced.key());
+    assertEquals(Key.of("INSERT", "TABLE", "S", "T", "ROLE", "R"),
+        new Grant("INSERT", "TABLE", "S", "T", "ROLE", "R", false).key());
+    assertThrows(IllegalArgumentException.class,
+        () -> new Grant("INSERT", "TABLE", "S", "T", "ROLE", "R", false,
+            null, "S", "U"));
+    assertThrows(UnsupportedException.class,
+        () -> new Grant("SELECT", "TABLE", "S", "T", "ROLE", "R", false,
+            "C", "S", "U"));
   }
 }

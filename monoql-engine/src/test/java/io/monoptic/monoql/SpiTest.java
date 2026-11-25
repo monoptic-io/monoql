@@ -77,7 +77,8 @@ class SpiTest {
           List.of("insert SELECT to R", "insert INSERT to R",
               "update SELECT grantable=true", "delete INSERT from R"),
           acl.calls);
-      assertEquals(List.of("[SELECT, TABLE, S, T, ROLE, R, true]"),
+      assertEquals(
+          List.of("[SELECT, TABLE, S, T, ROLE, R, true, null, null, null]"),
           rows(session, "show grants"));
 
       // Everything else is unsupported, and says so.
