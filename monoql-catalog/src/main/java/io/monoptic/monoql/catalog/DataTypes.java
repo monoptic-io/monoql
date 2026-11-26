@@ -10,17 +10,22 @@ import org.apache.calcite.prepare.CalciteCatalogReader;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlDataTypeSpec;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.calcite.sql.parser.SqlParser;
+import org.apache.calcite.rel.type.RelDataTypeSystem;
+import org.apache.calcite.sql.type.SqlTypeFactoryImpl;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql.validate.SqlValidatorUtil;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /** Converts between the SQL type strings stored in {@link Column#dataType()}
  * and Calcite's {@link RelDataType}.
@@ -30,6 +35,20 @@ import java.util.List;
  * {@code metadata.COLUMNS}. */
 public final class DataTypes {
   private DataTypes() {
+  }
+
+  /** Names that other dialects give a type, and the type each means here.
+   * A column declared with one is a column of that type: {@code STRING} and
+   * {@code TEXT} are {@code VARCHAR}. They are found like any named type,
+   * whatever their case. */
+  public static final Map<String, SqlTypeName> SYNONYMS =
+      Map.of("STRING", SqlTypeName.VARCHAR, "TEXT", SqlTypeName.VARCHAR);
+
+  /** The type a {@linkplain #SYNONYMS synonym} means, or null if the name
+   * is not one. */
+  public static RelProtoDataType synonym(String name) {
+    final SqlTypeName type = SYNONYMS.get(name.toUpperCase(Locale.ROOT));
+    return type == null ? null : typeFactory -> typeFactory.createSqlType(type);
   }
 
   /** Parses a type such as {@code DECIMAL(10, 2)} or {@code VARCHAR ARRAY}.
@@ -45,9 +64,11 @@ public final class DataTypes {
       throw new CatalogException("Invalid data type '" + dataType + "'", e);
     }
     final SqlDataTypeSpec spec = (SqlDataTypeSpec) ((SqlCall) node).operand(1);
+    final CalciteSchema root = CalciteSchema.createRootSchema(false);
+    SYNONYMS.keySet().forEach(name -> root.add(name, synonym(name)));
     final SqlValidator validator =
         SqlValidatorUtil.newValidator(SqlStdOperatorTable.instance(),
-            new CalciteCatalogReader(CalciteSchema.createRootSchema(false),
+            new CalciteCatalogReader(root,
                 List.of(), typeFactory, CalciteConnectionConfig.DEFAULT),
             typeFactory, SqlValidator.Config.DEFAULT);
     final RelDataType type;
@@ -57,6 +78,19 @@ public final class DataTypes {
       throw new CatalogException("Invalid data type '" + dataType + "'", e);
     }
     return typeFactory.createTypeWithNullability(type, nullable);
+  }
+
+  /** A type as the catalog keeps it: each type in it under its own name,
+   * so that {@code STRING ARRAY} is {@code VARCHAR ARRAY}. What is not a
+   * type is given back as it is, for whoever reads it to refuse. */
+  public static String canonical(String dataType) {
+    try {
+      return format(
+          parse(dataType, true,
+              new SqlTypeFactoryImpl(RelDataTypeSystem.DEFAULT)));
+    } catch (CatalogException e) {
+      return dataType;
+    }
   }
 
   /** Builds the row type of a list of columns. */

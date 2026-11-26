@@ -99,6 +99,11 @@ ALTER TABLE name DROP [IF EXISTS] PARTITION (column = value, ...)
 
 A table needs a column list or `AS query`, not both.
 
+A column's type is a SQL type: `VARCHAR(20)`, `DECIMAL(10, 2)`, `INTEGER
+ARRAY`. `STRING` and `TEXT`, as other dialects call it, are `VARCHAR`, in a
+column's declaration and in a `CAST` alike; a column declared `STRING` is a
+`VARCHAR` column, and `DESCRIBE` says so.
+
 | Statement | DML |
 |---|---|
 | `CREATE TABLE` | `INSERT INTO METADATA.TABLES` |

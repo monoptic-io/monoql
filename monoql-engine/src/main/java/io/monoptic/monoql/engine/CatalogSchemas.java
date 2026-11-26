@@ -23,6 +23,7 @@ import org.apache.calcite.DataContext;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.schema.Function;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
@@ -113,6 +114,16 @@ final class CatalogSchemas {
       final Set<String> names = new TreeSet<>(registry.catalogs().keySet());
       names.add(MetadataSchema.NAME);
       return names;
+    }
+
+    // A type's name in another dialect is known everywhere, in a column's
+    // declaration and in a CAST alike.
+    @Override public RelProtoDataType getType(String name) {
+      return DataTypes.synonym(name);
+    }
+
+    @Override public Set<String> getTypeNames() {
+      return DataTypes.SYNONYMS.keySet();
     }
 
     @Override public Expression getExpression(SchemaPlus parentSchema,

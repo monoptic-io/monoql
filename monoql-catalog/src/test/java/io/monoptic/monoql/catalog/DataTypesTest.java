@@ -44,6 +44,14 @@ class DataTypesTest {
     assertFalse(DataTypes.parse("INT", false, typeFactory).isNullable());
     assertEquals("INTEGER",
         DataTypes.format(DataTypes.parse("int", true, typeFactory)));
+    // What other dialects call a type is the type it means, alone or inside
+    // another, and is written back by its own name.
+    assertEquals("VARCHAR",
+        DataTypes.format(DataTypes.parse("STRING", true, typeFactory)));
+    assertEquals("VARCHAR",
+        DataTypes.format(DataTypes.parse("text", true, typeFactory)));
+    assertEquals("VARCHAR ARRAY",
+        DataTypes.format(DataTypes.parse("String ARRAY", true, typeFactory)));
     assertThrows(CatalogException.class,
         () -> DataTypes.parse("NOT A TYPE", true, typeFactory));
   }

@@ -362,8 +362,11 @@ final class Lowering {
     return row;
   }
 
+  /** A column's type as the catalog keeps it: under its own name, however
+   * the declaration wrote it. */
   private static String type(SqlColumnDecl decl) {
-    return decl.type().toSqlString(CalciteSqlDialect.DEFAULT).getSql();
+    return DataTypes.canonical(
+        decl.type().toSqlString(CalciteSqlDialect.DEFAULT).getSql());
   }
 
   private static String columns(List<Column> columns) {

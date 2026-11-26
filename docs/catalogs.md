@@ -132,7 +132,9 @@ Things to know:
   catalogs get it for free, including writes (`ALTER TABLE ... ADD COLUMN`
   arrives as an `update` of the table's row).
 - **Types are strings**: `VARCHAR(20)`, `DECIMAL(10, 2)`, `INTEGER ARRAY`.
-  `DataTypes` converts to and from Calcite's `RelDataType`.
+  `DataTypes` converts to and from Calcite's `RelDataType`. A column is kept
+  under its type's own name: declared `STRING`, it reaches the catalog as
+  `VARCHAR` (`DataTypes.SYNONYMS`).
 - **Renames are updates** in which the key changes.
 - **Grants are levelled** by which name columns are set: a catalog grant has
   neither `objectSchema` nor `objectName`; a schema grant has `objectSchema`;
