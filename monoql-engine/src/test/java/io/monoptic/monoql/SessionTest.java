@@ -110,6 +110,20 @@ class SessionTest {
         rows(session, "describe u"));
   }
 
+  @Test void typeSynonyms() {
+    // STRING and TEXT are what other dialects call VARCHAR. A column
+    // declared with one is a VARCHAR column and is described as one, and a
+    // CAST to one is a CAST to VARCHAR.
+    run(session, "create table t (a string, b text not null, c String array)",
+        "insert into t values ('x', 'y', array['z'])");
+    assertEquals(
+        List.of("[A, VARCHAR, true, null]", "[B, VARCHAR, false, null]",
+            "[C, VARCHAR ARRAY, true, null]"),
+        rows(session, "describe t"));
+    assertEquals(List.of("[x, y, [z], 12]"),
+        rows(session, "select a, b, c, cast(12 as string) from t"));
+  }
+
   @Test void existence() {
     run(session, "create table t (a int)");
     assertThrows(AlreadyExistsException.class,

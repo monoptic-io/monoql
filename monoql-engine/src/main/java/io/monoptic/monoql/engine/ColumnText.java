@@ -7,6 +7,7 @@ package io.monoptic.monoql.engine;
 import io.monoptic.monoql.Monoql;
 import io.monoptic.monoql.catalog.CatalogException;
 import io.monoptic.monoql.catalog.Column;
+import io.monoptic.monoql.catalog.DataTypes;
 import io.monoptic.monoql.sql.SqlColumnDecl;
 import io.monoptic.monoql.sql.SqlCreateTable;
 
@@ -56,8 +57,10 @@ final class ColumnText {
   }
 
   static Column of(SqlColumnDecl decl) {
+    // Kept under the type's own name, however the declaration wrote it.
     return new Column(decl.name().getSimple(),
-        decl.type().toSqlString(CalciteSqlDialect.DEFAULT).getSql(),
+        DataTypes.canonical(
+            decl.type().toSqlString(CalciteSqlDialect.DEFAULT).getSql()),
         decl.nullable(), decl.comment());
   }
 }
