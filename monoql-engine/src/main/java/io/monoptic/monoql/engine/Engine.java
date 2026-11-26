@@ -666,13 +666,19 @@ public final class Engine implements Lowering.Context {
     final QueryPlanner planner = planner();
     final RelRoot root = planner.rel(validate(planner, node));
     authorize(planner, root);
-    if (root.rel instanceof TableModify modify
-        && modify.getTable().unwrap(MetadataTable.class) != null) {
+    final TableModify modify =
+        root.rel instanceof TableModify m ? m : null;
+    final boolean metadata = modify != null
+        && modify.getTable().unwrap(MetadataTable.class) != null;
+    if (metadata
+        || modify != null
+        && modify.getTable().unwrap(WritableTable.class) != null) {
       // The modification itself is applied by the engine; only its input
       // is planned.
       final RelNode input =
           planner.optimize(RelRoot.of(modify.getInput(), SqlKind.SELECT));
-      return "MetadataModify(table=" + modify.getTable().getQualifiedName()
+      return (metadata ? "MetadataModify" : "TableModify") + "(table="
+          + modify.getTable().getQualifiedName()
           + ", operation=" + modify.getOperation() + ")\n"
           + "  " + RelOptUtil.toString(input,
               SqlExplainLevel.EXPPLAN_ATTRIBUTES).stripTrailing()
