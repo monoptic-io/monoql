@@ -10,6 +10,7 @@ import io.monoptic.monoql.catalog.memory.MemoryCatalog;
 import io.monoptic.monoql.engine.Engine;
 import io.monoptic.monoql.engine.Lowered;
 
+import org.apache.calcite.rel.RelRoot;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.tools.FrameworkConfig;
 
@@ -143,7 +144,29 @@ public final class Session implements AutoCloseable {
     return engine.lower(sql);
   }
 
-  /** Returns the plan of a query or DML statement. */
+  /** Returns a query, or an {@code INSERT}, {@code UPDATE} or
+   * {@code DELETE}, as relational algebra, without running it: the
+   * statement as written, with every name resolved, views replaced by
+   * their definitions, and nothing yet chosen about how to run it.
+   *
+   * <p>This is for an application that runs the plan itself. A catalog
+   * whose tables are metadata only, because their rows are somewhere the
+   * engine does not reach, can have its {@link io.monoptic.monoql.catalog.Job
+   * jobs} planned this way by whatever runs them. The statement is checked
+   * against the session's grants as it would be if the engine ran it, so
+   * a job planned as whoever submitted it is planned only if they may
+   * still do what it does.
+   *
+   * <p>A column that is a record is one column in the plan. A {@code ?} is
+   * a {@link org.apache.calcite.rex.RexDynamicParam}.
+   *
+   * @throws MonoqlException if the statement is any other kind */
+  public RelRoot plan(String sql) {
+    return engine.plan(sql);
+  }
+
+  /** Returns the plan of a query or DML statement, as the engine would
+   * run it, as text. */
   public String explain(String sql) {
     return engine.explain(sql);
   }

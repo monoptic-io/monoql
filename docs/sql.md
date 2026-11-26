@@ -281,7 +281,9 @@ DELETE FROM metadata.jobs WHERE job_name = 'nightly';      -- cancels it
   keeps a `REFRESH CONTINUOUSLY` view up to date is. Otherwise it is run
   once. Whatever runs a catalog's jobs can read
   `SELECT statement FROM metadata.jobs WHERE continuous` and run them all
-  as one pipeline, if it likes.
+  as one pipeline, if it likes. `Session.plan(statement)` gives it a
+  statement as relational algebra; see
+  [Plans that run elsewhere](catalogs.md#plans-that-run-elsewhere).
 - `PAUSED` asks whatever runs the job to hold it: not to start it, or to
   stop it until it is resumed. It is what whoever submitted the job wants,
   as `STATE` is what has happened.

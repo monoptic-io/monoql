@@ -73,6 +73,8 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
   private SqlValidator validator;
   private final Set<List<String>> named = new LinkedHashSet<>();
   private int viewDepth;
+  /** Whether record columns are taken apart; see {@link #rel}. */
+  private boolean flatten = true;
 
   /** Creates a planner.
    *
@@ -183,15 +185,32 @@ final class QueryPlanner implements RelOptTable.ViewExpander {
         config.getSqlToRelConverterConfig().withTrimUnusedFields(false));
   }
 
-  private static RelRoot finish(SqlToRelConverter converter, RelRoot root) {
-    root = root.withRel(converter.flattenTypes(root.rel, true));
+  private RelRoot finish(SqlToRelConverter converter, RelRoot root) {
+    if (flatten) {
+      root = root.withRel(converter.flattenTypes(root.rel, true));
+    }
     final RelBuilder relBuilder =
         RelBuilder.proto().create(root.rel.getCluster(), null);
     return root.withRel(RelDecorrelator.decorrelateQuery(root.rel, relBuilder));
   }
 
-  /** Converts a validated statement to relational algebra. */
+  /** Converts a validated statement to relational algebra, for the engine
+   * to run: a column that is a record is taken apart into a column for each
+   * of its fields. */
   RelRoot rel(SqlNode validated) {
+    flatten = true;
+    return convert(validated);
+  }
+
+  /** Converts a validated statement to relational algebra as the statement
+   * has it, for something else to run: a column that is a record stays one
+   * column, in the statement and in the views it reads. */
+  RelRoot logical(SqlNode validated) {
+    flatten = false;
+    return convert(validated);
+  }
+
+  private RelRoot convert(SqlNode validated) {
     named.clear();
     final SqlToRelConverter converter =
         converter(validator,

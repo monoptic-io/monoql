@@ -662,6 +662,22 @@ public final class Engine implements Lowering.Context {
     return b.toString();
   }
 
+  /** Returns a query, or an {@code INSERT}, {@code UPDATE} or
+   * {@code DELETE}, as relational algebra, for something other than the
+   * engine to run. The statement is checked as it would be if it were run
+   * here, and nothing is run. */
+  public RelRoot plan(String sql) {
+    final SqlNode node = parse(sql);
+    if (node instanceof SqlExplain || lowering.lower(node) != null) {
+      throw new MonoqlException("Only a query, or INSERT, UPDATE or DELETE,"
+          + " has a plan");
+    }
+    final QueryPlanner planner = planner();
+    final RelRoot root = planner.logical(validate(planner, node));
+    authorize(planner, root);
+    return root;
+  }
+
   private String plan(SqlNode node) {
     final QueryPlanner planner = planner();
     final RelRoot root = planner.rel(validate(planner, node));
