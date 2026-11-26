@@ -14,6 +14,9 @@ import io.monoptic.monoql.catalog.memory.MemoryCatalog;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.Linq4j;
+import org.apache.calcite.plan.RelOptUtil;
+import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.schema.ScannableTable;
@@ -802,6 +805,48 @@ class SessionTest {
     session.explain("delete from t where a = 1");
     assertEquals(List.of("[3]"), rows(session, "select sum(a) from t"));
     assertEquals(1, rows(session, "explain plan for select * from t").size());
+  }
+
+  /** A statement can be had as relational algebra, for something else to
+   * run. */
+  @Test void plans() {
+    run(session,
+        "create table t (a int, who row(name varchar, age int))",
+        "create table u (a int)",
+        "create view v as select a, who from t where a > 1");
+    final RelRoot query =
+        session.plan("select t.who.name, count(*) as n from t group by t.who.name");
+    assertEquals(List.of("NAME", "N"),
+        query.validatedRowType.getFieldNames());
+    final String plan = RelOptUtil.toString(query.rel);
+    // Nothing is chosen about how to run it, and a record stays a column.
+    assertTrue(plan.contains("LogicalAggregate"), plan);
+    assertTrue(plan.contains("LogicalTableScan(table=[[MEMORY, MAIN, T]])"),
+        plan);
+    assertEquals(List.of("A", "WHO"),
+        query.rel.getInput(0).getInput(0).getRowType().getFieldNames());
+    // A view is its definition, and the record in it is a column still.
+    final RelRoot view = session.plan("select who from v");
+    assertTrue(RelOptUtil.toString(view.rel)
+        .contains("LogicalTableScan(table=[[MEMORY, MAIN, T]])"));
+    assertTrue(view.validatedRowType.getFieldList().get(0).getType()
+        .isStruct());
+    // A write is a modification of its table, over what it reads.
+    final RelRoot insert = session.plan("insert into u select a from t where a > ?");
+    final TableModify modify = (TableModify) insert.rel;
+    assertEquals(List.of("MEMORY", "MAIN", "U"),
+        modify.getTable().getQualifiedName());
+    assertTrue(modify.isInsert());
+    // Nothing was run.
+    assertEquals(List.of("[0]"), rows(session, "select count(*) from u"));
+    // Anything else is not a plan.
+    for (String sql : List.of("drop table t", "show tables",
+        "explain plan for select * from t")) {
+      final MonoqlException e =
+          assertThrows(MonoqlException.class, () -> session.plan(sql));
+      assertEquals("Only a query, or INSERT, UPDATE or DELETE, has a plan",
+          e.getMessage());
+    }
   }
 
   @Test void errors() {

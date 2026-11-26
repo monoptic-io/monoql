@@ -191,6 +191,26 @@ default Optional<org.apache.calcite.schema.Table> bind(TableInfo table)
   the right answer for registries, and for planning pipelines that run
   elsewhere.
 
+### Plans that run elsewhere
+
+Whatever runs statements over tables the engine cannot read asks for the
+statement as relational algebra, and runs that:
+
+```java
+RelRoot root = session.plan("INSERT INTO totals SELECT region, SUM(amount) FROM orders GROUP BY region");
+```
+
+- It takes a query, or an `INSERT`, `UPDATE` or `DELETE`; the statement of a
+  [job](sql.md#jobs) is one. Nothing is run.
+- The plan is the statement as written: names resolved, views replaced by
+  their definitions, nothing chosen about how to run it. A write is a
+  `TableModify` over what it reads. A column that is a record is one
+  column, where the engine's own plans take it apart.
+- The statement is checked against the session's grants as it would be if
+  it were run here. Planning a job in a session that acts as whoever
+  submitted it (`session.as(...)`) says whether they may still do what it
+  does.
+
 ### Materialized views
 
 A materialized view has rows too, if the catalog keeps them:
